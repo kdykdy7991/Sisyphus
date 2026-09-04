@@ -1,0 +1,12 @@
+import type {Knowledge} from '../types';
+const now='2026-09-04 10:20';
+export const seedKnowledge:Knowledge[]=[
+ {id:'redis-fast',question:'Redis 为什么快？',domain:'后端开发',topic:'Redis',tags:['Redis','基础原理','高性能','面试题'],answer:'Redis 之所以性能很高，主要因为它基于内存、采用高效的数据结构、单线程模型避免了线程切换开销，并通过 I/O 多路复用和精简的协议设计处理高并发请求。\n\n## 1. 基于内存操作\n所有数据存储在内存中，避免了磁盘 I/O 的高延迟，读写速度非常快。\n\n## 2. 单线程执行核心命令\nRedis 使用单线程处理客户端请求，避免了多线程上下文切换和锁竞争的开销。\n\n## 3. 高效的数据结构\nSDS、跳表、压缩列表等针对不同场景进行了优化。\n\n## 4. I/O 多路复用\n使用 epoll/kqueue 等机制处理大量并发连接。\n\n## 5. 精简的通信协议\nRESP 协议解析简单、开销小。',followUps:['为什么 Redis 采用单线程？','单线程为什么还能支持高并发？','Redis 6 为什么引入多线程？'],relatedIds:['redis-single','redis-io'],source:'截图导入',createdAt:now,updatedAt:now,favorite:true},
+ {id:'redis-single',question:'Redis 为什么使用单线程？',domain:'后端开发',topic:'Redis',tags:['Redis','线程模型'],answer:'Redis 的核心命令执行采用单线程模型，从而避免共享数据的锁竞争，让命令保持原子性并简化实现。性能瓶颈通常在网络与内存，而不是 CPU。Redis 6 引入的多线程主要负责网络 I/O。',followUps:['Redis 6 的多线程做了什么？'],relatedIds:['redis-fast'],source:'截图导入',createdAt:now,updatedAt:now},
+ {id:'redis-io',question:'Redis 的 I/O 多路复用是什么？',domain:'后端开发',topic:'Redis',tags:['Redis','网络'],answer:'I/O 多路复用让一个线程同时监听多个连接的可读、可写事件。Redis 在 Linux 上使用 epoll，把已就绪的事件交给事件循环处理，避免为每个连接创建线程。',followUps:[],relatedIds:['redis-fast'],source:'笔记整理',createdAt:now,updatedAt:now},
+ {id:'hashmap',question:'HashMap 的底层实现原理是什么？',domain:'后端开发',topic:'Java',tags:['Java','集合'],answer:'Java 8 的 HashMap 由数组、链表和红黑树组成。键的哈希值决定桶位置；冲突时先形成链表，达到阈值且容量足够后树化，以改善最坏情况下的查询复杂度。',followUps:['HashMap 什么时候扩容？'],relatedIds:['chm'],source:'手动创建',createdAt:now,updatedAt:now},
+ {id:'chm',question:'ConcurrentHashMap 如何保证线程安全？',domain:'后端开发',topic:'Java',tags:['Java','并发'],answer:'Java 8 的 ConcurrentHashMap 结合 CAS 与 synchronized：空桶插入使用 CAS，桶内更新锁定桶首节点；读取多数情况下无需加锁。',followUps:[],relatedIds:['hashmap'],source:'手动创建',createdAt:now,updatedAt:now},
+ {id:'mysql-btree',question:'MySQL B+ Tree 为什么适合索引？',domain:'数据库',topic:'MySQL',tags:['MySQL','索引'],answer:'B+ Tree 分支多、树高低，能减少磁盘 I/O；所有数据位于叶子节点，叶子节点有序相连，既适合等值查询，也适合范围扫描。',followUps:[],relatedIds:[],source:'截图导入',createdAt:now,updatedAt:now},
+ {id:'rag-rerank',question:'RAG 为什么需要 Rerank？',domain:'AI / 大模型',topic:'RAG',tags:['RAG','Rerank'],answer:'向量召回追求较高召回率，但相似度不等于答案相关性。Rerank 使用更精细的模型重新排序候选内容，降低无关上下文进入生成模型的概率。',followUps:[],relatedIds:['mcp'],source:'手动创建',createdAt:now,updatedAt:now},
+ {id:'mcp',question:'MCP 解决什么问题？',domain:'AI / 大模型',topic:'MCP',tags:['MCP','协议'],answer:'MCP 通过标准化模型与外部工具、资源和提示的连接方式，减少每个 AI 应用分别适配数据源与工具的重复成本。',followUps:[],relatedIds:['rag-rerank'],source:'手动创建',createdAt:now,updatedAt:now}
+];
