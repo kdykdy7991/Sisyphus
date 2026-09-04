@@ -151,12 +151,7 @@ export function SettingsPage() {
 
   return (
     <div className="settings-page page-pad">
-      <header className="page-header">
-        <div>
-          <p>设置</p>
-          <h1>配置你的 Interview Kit</h1>
-          <span>配置用于真实图片提取的模型服务；API Key 仅保存在本地受限文件中，应用内不会回显。</span>
-        </div>
+      <header className="page-header settings-top">
         <Button variant="primary" onClick={save}>
           {state === 'saved' ? (
             <>

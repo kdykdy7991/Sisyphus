@@ -130,11 +130,6 @@ export function HomePage() {
   return (
     <div className="home-layout">
       <section className="home-content">
-        <header className="home-hero">
-          <h1>专注积累，面试更从容</h1>
-          <p>搜索你的面试知识，随时回顾，不断进步。</p>
-        </header>
-
         <div className="global-search">
           <Search />
           <input
