@@ -30,12 +30,13 @@ pub fn open(path: &std::path::Path) -> rusqlite::Result<Connection> {
     Ok(conn)
 }
 
-/// Idempotent bootstrap: run migrations, create/rebuild the FTS index, seed
-/// demo data. Returns true when the FTS index is ready (always).
+/// Idempotent bootstrap: run migrations, create/rebuild the FTS index. The
+/// database starts empty — the user builds their knowledge base by importing
+/// screenshots / saving items themselves. Returns true when the FTS index is
+/// ready (always).
 pub fn init(conn: &Connection) -> rusqlite::Result<bool> {
     migrate(conn)?;
     let ready = init_fts(conn)?;
-    seed_if_empty(conn)?;
     Ok(ready)
 }
 
@@ -137,12 +138,21 @@ fn fts_is_jieba(conn: &Connection) -> rusqlite::Result<bool> {
 /// Drop and rebuild the derived FTS index from `knowledge_items`. The primary
 /// table is never touched — data, IDs, tags and topics are preserved; only the
 /// tokenized read-model is rebuilt (rowid = knowledge id stays stable).
-fn rebuild_fts(conn: &Connection) -> rusqlite::Result<()> {
+pub fn rebuild_fts(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(&format!("DROP TABLE IF EXISTS knowledge_fts; {}", fts_ddl()))?;
     for p in list(conn)? {
         let Some(kid) = p.id.parse::<i64>().ok() else { continue };
         sync_fts(conn, kid, &p)?;
     }
+    Ok(())
+}
+
+/// Run pending migrations then drop+rebuild the derived FTS index. Used by
+/// Restore after the database file is replaced: never trust the FTS table from
+/// the backup, the source of truth is `knowledge_items`.
+pub fn after_restore(conn: &Connection) -> rusqlite::Result<()> {
+    migrate(conn)?;
+    rebuild_fts(conn)?;
     Ok(())
 }
 
@@ -154,17 +164,6 @@ fn init_fts(conn: &Connection) -> rusqlite::Result<bool> {
         rebuild_fts(conn)?;
     }
     Ok(true)
-}
-
-fn seed_if_empty(conn: &Connection) -> rusqlite::Result<()> {
-    let n: i64 = conn.query_row("SELECT count(*) FROM knowledge_items", [], |r| r.get(0))?;
-    if n > 0 {
-        return Ok(());
-    }
-    for p in seed_payloads() {
-        save_internal(conn, &p)?;
-    }
-    Ok(())
 }
 
 /// Minimal DB row mirror of the frontend `Knowledge`; camelCase matches TS.
@@ -289,6 +288,39 @@ pub fn save(conn: &Connection, item: &KnowledgePayload) -> rusqlite::Result<Know
 
 fn begin(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch("BEGIN")
+}
+
+/// Delete every knowledge row plus the derived tag / topic / FTS state.
+/// The schema (tables, indexes, `user_version`) is left intact and the
+/// connection stays open, so a running app keeps working without a restart.
+/// Returns the number of knowledge items that were removed.
+///
+/// `knowledge_tags` would cascade from `knowledge_items` (foreign_keys=ON), but
+/// it is deleted explicitly as well: an emptied base must never depend on the
+/// pragma being set, and must not leave orphaned tag rows behind.
+pub fn clear(conn: &Connection) -> rusqlite::Result<usize> {
+    begin(conn)?;
+    let result = (|| -> rusqlite::Result<usize> {
+        let count: i64 = conn.query_row("SELECT count(*) FROM knowledge_items", [], |r| r.get(0))?;
+        conn.execute_batch(
+            "DELETE FROM knowledge_tags;
+             DELETE FROM knowledge_items;
+             DELETE FROM tags;
+             DELETE FROM topics;
+             DELETE FROM knowledge_fts;",
+        )?;
+        Ok(count as usize)
+    })();
+    match result {
+        Ok(n) => {
+            conn.execute_batch("COMMIT")?;
+            Ok(n)
+        }
+        Err(e) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(e)
+        }
+    }
 }
 
 /// Insert a new row or update an existing one (matched by numeric id string).
@@ -521,115 +553,10 @@ fn now_ts() -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Seed demo data (mirrors frontend mockData.ts so a fresh DB is not empty).
+// (No seed data. A fresh database starts empty — the user builds their
+// knowledge base by importing screenshots / saving items themselves.)
 // ---------------------------------------------------------------------------
 
-struct SeedSpec {
-    q: &'static str,
-    a: &'static str,
-    domain: &'static str,
-    topic: &'static str,
-    source: &'static str,
-    tags: &'static [&'static str],
-    follow_ups: &'static [&'static str],
-    favorite: bool,
-    last_read_at: Option<&'static str>,
-}
-
-const SEED: &[SeedSpec] = &[
-    SeedSpec {
-        q: "Redis 为什么快？",
-        a: "Redis 之所以性能很高，主要因为它基于内存、采用高效的数据结构、单线程模型避免了线程切换开销，并通过 I/O 多路复用和精简的协议设计处理高并发请求。\n\n## 1. 基于内存操作\n所有数据存储在内存中，避免了磁盘 I/O 的高延迟，读写速度非常快。\n\n## 2. 单线程执行核心命令\nRedis 使用单线程处理客户端请求，避免了多线程上下文切换和锁竞争的开销。\n\n## 3. 高效的数据结构\nSDS、跳表、压缩列表等针对不同场景进行了优化。\n\n## 4. I/O 多路复用\n使用 epoll/kqueue 等机制处理大量并发连接。\n\n## 5. 精简的通信协议\nRESP 协议解析简单、开销小。",
-        domain: "后端开发", topic: "Redis", source: "截图导入",
-        tags: &["Redis", "基础原理", "高性能", "面试题"],
-        follow_ups: &["为什么 Redis 采用单线程？", "单线程为什么还能支持高并发？", "Redis 6 为什么引入多线程？"],
-        favorite: true,
-        last_read_at: Some("1755000000"),
-    },
-    SeedSpec {
-        q: "Redis 为什么使用单线程？",
-        a: "Redis 的核心命令执行采用单线程模型，从而避免共享数据的锁竞争，让命令保持原子性并简化实现。性能瓶颈通常在网络与内存，而不是 CPU。Redis 6 引入的多线程主要负责网络 I/O。",
-        domain: "后端开发", topic: "Redis", source: "截图导入",
-        tags: &["Redis", "线程模型"],
-        follow_ups: &["Redis 6 的多线程做了什么？"],
-        favorite: false,
-        last_read_at: Some("1754900000"),
-    },
-    SeedSpec {
-        q: "Redis 的 I/O 多路复用是什么？",
-        a: "I/O 多路复用让一个线程同时监听多个连接的可读、可写事件。Redis 在 Linux 上使用 epoll，把已就绪的事件交给事件循环处理，避免为每个连接创建线程。",
-        domain: "后端开发", topic: "Redis", source: "笔记整理",
-        tags: &["Redis", "网络"],
-        follow_ups: &[],
-        favorite: false,
-        last_read_at: Some("1754800000"),
-    },
-    SeedSpec {
-        q: "HashMap 的底层实现原理是什么？",
-        a: "Java 8 的 HashMap 由数组、链表和红黑树组成。键的哈希值决定桶位置；冲突时先形成链表，达到阈值且容量足够后树化，以改善最坏情况下的查询复杂度。",
-        domain: "后端开发", topic: "Java", source: "手动创建",
-        tags: &["Java", "集合"],
-        follow_ups: &["HashMap 什么时候扩容？"],
-        favorite: false,
-        last_read_at: Some("1753000000"),
-    },
-    SeedSpec {
-        q: "ConcurrentHashMap 如何保证线程安全？",
-        a: "Java 8 的 ConcurrentHashMap 结合 CAS 与 synchronized：空桶插入使用 CAS，桶内更新锁定桶首节点；读取多数情况下无需加锁。",
-        domain: "后端开发", topic: "Java", source: "手动创建",
-        tags: &["Java", "并发"],
-        follow_ups: &[],
-        favorite: false,
-        last_read_at: None,
-    },
-    SeedSpec {
-        q: "MySQL B+ Tree 为什么适合索引？",
-        a: "B+ Tree 分支多、树高低，能减少磁盘 I/O；所有数据位于叶子节点，叶子节点有序相连，既适合等值查询，也适合范围扫描。",
-        domain: "数据库", topic: "MySQL", source: "截图导入",
-        tags: &["MySQL", "索引"],
-        follow_ups: &[],
-        favorite: false,
-        last_read_at: None,
-    },
-    SeedSpec {
-        q: "RAG 为什么需要 Rerank？",
-        a: "向量召回追求较高召回率，但相似度不等于答案相关性。Rerank 使用更精细的模型重新排序候选内容，降低无关上下文进入生成模型的概率。",
-        domain: "AI / 大模型", topic: "RAG", source: "手动创建",
-        tags: &["RAG", "Rerank"],
-        follow_ups: &[],
-        favorite: false,
-        last_read_at: None,
-    },
-    SeedSpec {
-        q: "MCP 解决什么问题？",
-        a: "MCP 通过标准化模型与外部工具、资源和提示的连接方式，减少每个 AI 应用分别适配数据源与工具的重复成本。",
-        domain: "AI / 大模型", topic: "MCP", source: "手动创建",
-        tags: &["MCP", "协议"],
-        follow_ups: &[],
-        favorite: false,
-        last_read_at: None,
-    },
-];
-
-fn seed_payloads() -> Vec<KnowledgePayload> {
-    SEED.iter()
-        .map(|s| KnowledgePayload {
-            id: String::new(), // let the DB assign a fresh numeric id
-            question: s.q.to_string(),
-            answer: s.a.to_string(),
-            domain: s.domain.to_string(),
-            topic: s.topic.to_string(),
-            tags: s.tags.iter().map(|x| x.to_string()).collect(),
-            follow_ups: s.follow_ups.iter().map(|x| x.to_string()).collect(),
-            related_ids: Vec::new(),
-            source: s.source.to_string(),
-            created_at: "2026-09-04 10:20".to_string(),
-            updated_at: "2026-09-04 10:20".to_string(),
-            favorite: Some(s.favorite),
-            last_read_at: s.last_read_at.map(|t| t.to_string()),
-        })
-        .collect()
-}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -708,23 +635,19 @@ mod tests {
     }
 
     #[test]
-    fn init_creates_seed_and_schema() {
-        let path = tmp_path("seed");
+    fn init_creates_empty_schema() {
+        let path = tmp_path("empty");
         let (conn, trigram) = open_inits(&path);
+        // Fresh DB starts empty: no seed data, no tags, no topics, no FTS rows.
         let items = list(&conn).unwrap();
-        assert_eq!(items.len(), SEED.len(), "seed count");
+        assert!(items.is_empty(), "fresh DB must start with zero knowledge");
         assert!(trigram, "bundled SQLite should support trigram tokenizer");
-        // normalized tables populated by seed
         let tags: i64 = conn.query_row("SELECT count(*) FROM tags", [], |r| r.get(0)).unwrap();
         let topics: i64 = conn.query_row("SELECT count(*) FROM topics", [], |r| r.get(0)).unwrap();
         let fts: i64 = conn.query_row("SELECT count(*) FROM knowledge_fts", [], |r| r.get(0)).unwrap();
-        assert_eq!(tags, 15);
-        assert_eq!(topics, 5);
-        assert_eq!(fts, 8);
-        // seed ids are numeric strings
-        for it in &items {
-            assert!(it.id.parse::<i64>().is_ok(), "id is numeric: {}", it.id);
-        }
+        assert_eq!(tags, 0);
+        assert_eq!(topics, 0);
+        assert_eq!(fts, 0);
     }
 
     #[test]
@@ -741,18 +664,65 @@ mod tests {
         let saved = save(&conn, &updated).unwrap();
         assert_eq!(saved.id, inserted.id, "same row on update");
         assert_eq!(saved.question, "Redis 集群横向扩容怎么做？");
-        assert_eq!(list(&conn).unwrap().len(), SEED.len() + 1);
+        // Fresh DB + 1 insert = exactly 1 row.
+        assert_eq!(list(&conn).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn clear_removes_knowledge_and_all_derived_rows() {
+        let path = tmp_path("clear");
+        let (conn, _) = open_inits(&path);
+        // Build payloads that carry tags — the bare `insert()` helper passes an
+        // empty tag list, which would leave the derived `tags` table empty and
+        // make the "derived state is gone" assertions below vacuous.
+        let mk = |q: &str, d: &str, t: &str| KnowledgePayload {
+            id: String::new(),
+            question: q.to_string(),
+            domain: d.to_string(),
+            topic: t.to_string(),
+            ..payload("_")
+        };
+        save(&conn, &mk("Redis 为什么快？", "后端开发", "Redis")).unwrap();
+        save(&conn, &mk("MySQL 索引为什么用 B+Tree？", "数据库", "MySQL")).unwrap();
+        assert_eq!(list(&conn).unwrap().len(), 2);
+        // The inserts above populate every derived table.
+        assert!(count(&conn, "tags") > 0, "tags populated before clear");
+        assert!(count(&conn, "topics") > 0, "topics populated before clear");
+        assert!(count(&conn, "knowledge_tags") > 0, "knowledge_tags populated before clear");
+        assert!(count(&conn, "knowledge_fts") > 0, "FTS populated before clear");
+
+        let removed = clear(&conn).unwrap();
+        assert_eq!(removed, 2, "clear reports how many items it deleted");
+
+        // Knowledge and every derived table are empty; the schema survives
+        // (list() still runs) so no reopen / remigrate is needed.
+        assert!(list(&conn).unwrap().is_empty());
+        for t in ["tags", "topics", "knowledge_tags", "knowledge_fts"] {
+            assert_eq!(count(&conn, t), 0, "{t} must be empty after clear");
+        }
+
+        // The emptied base stays usable: saving again re-derives tags + FTS.
+        let again = save(&conn, &payload("清空后再存一条")).unwrap();
+        assert!(!again.id.is_empty());
+        assert_eq!(list(&conn).unwrap().len(), 1);
+        assert!(count(&conn, "knowledge_fts") > 0, "FTS rebuilt on next save");
+    }
+
+    /// Row count of a table, used by the clear test.
+    fn count(conn: &Connection, table: &str) -> i64 {
+        conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap()
     }
 
     #[test]
     fn get_records_last_read_at() {
         let path = tmp_path("lastread");
         let (conn, _) = open_inits(&path);
-        let all = list(&conn).unwrap();
-        let id = all[0].id.clone();
-        assert!(all[0].last_read_at.is_none(), "seed unread before get");
+        // Insert a single item; verify `get` populates `last_read_at`.
+        let inserted = insert(&conn, "测试题", "答案", "测试", "Topic");
+        assert!(inserted.last_read_at.is_none(), "fresh insert is unread");
 
-        let got = get(&conn, &id).unwrap().expect("item found");
+        let got = get(&conn, &inserted.id).unwrap().expect("item found");
         assert!(got.last_read_at.is_some(), "last_read_at set after read");
     }
 
@@ -760,12 +730,34 @@ mod tests {
     fn recent_orders_by_last_read_at() {
         let path = tmp_path("recent");
         let (conn, _) = open_inits(&path);
+        // Insert four items and pin distinct `last_read_at` values directly,
+        // because `now_ts()` is seconds-resolution and several `get` calls in
+        // the same second would tie. Pinning is fine for the SQL ordering
+        // test — the only thing under test is the ORDER BY clause.
+        let a = insert(&conn, "A 题", "a", "d", "t");
+        let b = insert(&conn, "B 题", "b", "d", "t");
+        let c = insert(&conn, "C 题", "c", "d", "t");
+        let d = insert(&conn, "D 题", "d", "d", "t");
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
+        for (id, secs_ago) in [
+            (a.id.parse::<i64>().unwrap(), 30i64),
+            (b.id.parse::<i64>().unwrap(), 10i64), // newest
+            (c.id.parse::<i64>().unwrap(), 20i64),
+            (d.id.parse::<i64>().unwrap(), 40i64), // oldest
+        ] {
+            conn.execute(
+                "UPDATE knowledge_items SET last_read_at = ?1 WHERE id = ?2",
+                rusqlite::params![(now - secs_ago as u64).to_string(), id],
+            )
+            .unwrap();
+        }
+
         let recent = recent(&conn, 4).unwrap();
         assert_eq!(recent.len(), 4);
-        // most-recently-read seeds first (redis-fast is 1755000000)
-        assert_eq!(recent[0].question, "Redis 为什么快？");
-        assert_eq!(recent[1].question, "Redis 为什么使用单线程？");
-        assert_eq!(recent[3].question, "HashMap 的底层实现原理是什么？");
+        assert_eq!(recent[0].id, b.id, "most recent read first");
+        assert_eq!(recent[1].id, c.id);
+        assert_eq!(recent[2].id, a.id);
+        assert_eq!(recent[3].id, d.id, "earliest read last");
     }
 
     #[test]
@@ -828,6 +820,10 @@ mod tests {
     fn migration_rebuilds_legacy_trigram_fts() {
         let path = tmp_path("migrate");
         let (conn, _) = open_inits(&path);
+        // Insert a row whose content matches the search query below so the
+        // rebuilt FTS can find it. (No demo seed anymore — the test builds
+        // its own.)
+        insert(&conn, "Redis 为什么单线程？", "Redis 核心命令使用单线程执行。", "后端开发", "Redis");
         let before: i64 = conn.query_row("SELECT count(*) FROM knowledge_items", [], |r| r.get(0)).unwrap();
         assert!(before > 0);
 

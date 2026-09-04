@@ -6,6 +6,7 @@ mod vision;
 mod similarity;
 mod chat;
 mod tokenizer;
+mod backup;
 
 use tauri::Manager;
 use config::ApiConfigState;
@@ -14,6 +15,7 @@ use db::Db;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let path = db::resolve_db_path(app.path().app_data_dir()?)?;
             let conn = db::open(&path)?;
@@ -28,6 +30,7 @@ pub fn run() {
             app.manage(ApiConfigState {
                 data_dir: data_dir.clone(),
                 inner: std::sync::Mutex::new(api_cfg),
+                db_path: path.clone(),
             });
             eprintln!("[interview-kit] database ready at {} (trigram_fts={})", db_location, trigram);
             Ok(())
@@ -38,12 +41,16 @@ pub fn run() {
             commands::knowledge_search,
             commands::knowledge_save,
             commands::knowledge_recent,
+            commands::knowledge_clear,
             commands::settings_get,
             commands::settings_save,
             commands::settings_test_connection,
             commands::vision_extract,
             commands::analyze_similarity,
             commands::knowledge_chat,
+            commands::backup_create,
+            commands::backup_inspect,
+            commands::backup_restore,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Interview Kit");

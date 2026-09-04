@@ -1,6 +1,6 @@
 import { seedKnowledge } from '../data/mockData';
-import type { ChatMessage, ImportImage, Knowledge, Settings } from '../types';
-import type { ChatService, ImportService, KnowledgeService, SettingsService } from './interfaces';
+import type { BackupInspect, BackupRestoreResult, BackupSummary, ChatMessage, ImportImage, Knowledge, Settings } from '../types';
+import type { BackupService, ChatService, ImportService, KnowledgeService, SettingsService } from './interfaces';
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 let knowledge = [...seedKnowledge];
 const makeDraft = (image: ImportImage, index: number): Knowledge => ({
@@ -14,6 +14,11 @@ export const knowledgeService: KnowledgeService = {
   async search(query) { const q = query.toLowerCase(); return knowledge.filter(item => [item.question, item.answer, item.domain, item.topic, ...item.tags].join(' ').toLowerCase().includes(q)); },
   async save(item) { const index = knowledge.findIndex(entry => entry.id === item.id); if (index >= 0) knowledge[index] = item; else knowledge = [item, ...knowledge]; return item; },
   async recent(limit = 10) { return [...knowledge].slice(0, limit); },
+  async clear() {
+    const removed = knowledge.length;
+    knowledge = [];
+    return removed;
+  },
 };
 export const importService: ImportService = {
   async extract(images, onProgress) {
@@ -34,3 +39,24 @@ export const chatService: ChatService = {
 };
 let settings: Settings = { apiBaseUrl: 'https://api.openai.com/v1', apiKey: '', chatModel: 'gpt-5', visionModel: 'gpt-5', databaseLocation: '~/Library/Application Support/Interview Kit/interview.db' };
 export const settingsService: SettingsService = { async get() { return { ...settings }; }, async save(value) { settings = { ...value }; await wait(250); }, async testConnection() { await wait(800); return { ok: true, message: 'Mock 模式下无法测试真实连接。' }; } };
+
+// Mock Backup: plain `npm run dev` (no Tauri) keeps the surface honest
+// without any actual file IO. Useful for visual development of the Settings
+// page; production code always goes through the Tauri implementation. The
+// mock carries no application settings (the real backup also doesn't).
+export const backupService: BackupService = {
+  async pickSavePath() { return null; },
+  async pickOpenPath() { return null; },
+  async create() {
+    await wait(300);
+    return { path: '(mock) backup.ikbackup', formatVersion: 1, createdAt: new Date().toISOString(), knowledgeCount: knowledge.length, domainCount: 0 };
+  },
+  async inspect() {
+    await wait(200);
+    return { formatVersion: 1, app: 'Interview Kit (Mock)', createdAt: new Date().toISOString(), databaseSchemaVersion: 1, knowledgeCount: knowledge.length, domainCount: 0 };
+  },
+  async restore() {
+    await wait(300);
+    return { knowledgeCount: knowledge.length, domainCount: 0 };
+  },
+};

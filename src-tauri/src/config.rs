@@ -78,9 +78,13 @@ fn restrict_permissions(path: &Path) {
 
 /// Shared in-memory handle so commands can read/write config without re-reading
 /// the file every call. Mutex for interior mutability across Tauri commands.
+/// `db_path` is the on-disk location of `interview-kit.db`; it's read-only at
+/// runtime (resolved once in setup) and is used by the backup/restore commands
+/// to know which file to snapshot / replace.
 pub struct ApiConfigState {
     pub data_dir: PathBuf,
     pub inner: Mutex<ApiConfig>,
+    pub db_path: PathBuf,
 }
 
 #[cfg(test)]

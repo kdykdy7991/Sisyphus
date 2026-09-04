@@ -5,9 +5,10 @@
 import { isTauri } from './env';
 import * as mock from './mockServices';
 import * as tauri from './tauriServices';
-import type { ChatService, ImportService, KnowledgeService, SettingsService } from './interfaces';
+import type { BackupService, ChatService, ImportService, KnowledgeService, SettingsService } from './interfaces';
 
 export const knowledgeService: KnowledgeService = isTauri ? tauri.knowledgeService : mock.knowledgeService;
 export const importService: ImportService = isTauri ? tauri.importService : mock.importService;
 export const chatService: ChatService = isTauri ? tauri.chatService : mock.chatService;
 export const settingsService: SettingsService = isTauri ? tauri.settingsService : mock.settingsService;
+export const backupService: BackupService = isTauri ? tauri.backupService : mock.backupService;

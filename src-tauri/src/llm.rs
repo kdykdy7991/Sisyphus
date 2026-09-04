@@ -30,7 +30,10 @@ pub enum LlmError {
     /// Transport / connectivity failure (DNS, refused, TLS, timeout).
     Network(String),
     /// The endpoint answered but with a non-2xx status.
-    Api { status: u16, body: String },
+    Api {
+        status: u16,
+        body: String,
+    },
     /// Response body couldn't be decoded as expected.
     BadResponse(String),
 }
@@ -75,9 +78,16 @@ pub fn parse_model_message(message: &serde_json::Value) -> ModelMessage {
         .and_then(serde_json::Value::as_str)
         .map(String::from);
     let mut tool_calls = Vec::new();
-    if let Some(arr) = message.get("tool_calls").and_then(serde_json::Value::as_array) {
+    if let Some(arr) = message
+        .get("tool_calls")
+        .and_then(serde_json::Value::as_array)
+    {
         for tc in arr {
-            let id = tc.get("id").and_then(serde_json::Value::as_str).unwrap_or("").to_string();
+            let id = tc
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .to_string();
             let name = tc
                 .pointer("/function/name")
                 .and_then(serde_json::Value::as_str)
@@ -89,11 +99,18 @@ pub fn parse_model_message(message: &serde_json::Value) -> ModelMessage {
                 .unwrap_or("")
                 .to_string();
             if !id.is_empty() && !name.is_empty() {
-                tool_calls.push(ToolCall { id, name, arguments });
+                tool_calls.push(ToolCall {
+                    id,
+                    name,
+                    arguments,
+                });
             }
         }
     }
-    ModelMessage { content, tool_calls }
+    ModelMessage {
+        content,
+        tool_calls,
+    }
 }
 
 #[derive(Clone)]
@@ -136,6 +153,7 @@ impl OpenAiCompatClient {
             "messages": messages,
             "temperature": 0.2,
             "max_tokens": max_tokens,
+            "stream": false,
             "response_format": { "type": "json_object" },
         });
 
@@ -149,7 +167,11 @@ impl OpenAiCompatClient {
             .map_err(|e| LlmError::Network(e.to_string()))?;
 
         let status = request.status();
-        let text = request.text().await.map_err(|e| LlmError::BadResponse(e.to_string()))?;
+        let content_type = response_content_type(&request);
+        let text = request
+            .text()
+            .await
+            .map_err(|e| LlmError::BadResponse(e.to_string()))?;
         if !status.is_success() {
             return Err(LlmError::Api {
                 status: status.as_u16(),
@@ -157,8 +179,7 @@ impl OpenAiCompatClient {
             });
         }
 
-        let parsed: serde_json::Value = serde_json::from_str(&text)
-            .map_err(|e| LlmError::BadResponse(format!("响应不是合法 JSON：{e}")))?;
+        let parsed = parse_http_json(&text, &content_type)?;
         let content = parsed
             .pointer("/choices/0/message/content")
             .and_then(|c| c.as_str())
@@ -185,6 +206,7 @@ impl OpenAiCompatClient {
             "model": self.model,
             "messages": messages,
             "temperature": 0.3,
+            "stream": false,
         });
         if let Some(t) = tools {
             body["tools"] = t.clone();
@@ -199,15 +221,18 @@ impl OpenAiCompatClient {
             .await
             .map_err(|e| LlmError::Network(e.to_string()))?;
         let status = request.status();
-        let text = request.text().await.map_err(|e| LlmError::BadResponse(e.to_string()))?;
+        let content_type = response_content_type(&request);
+        let text = request
+            .text()
+            .await
+            .map_err(|e| LlmError::BadResponse(e.to_string()))?;
         if !status.is_success() {
             return Err(LlmError::Api {
                 status: status.as_u16(),
                 body: sanitize_error_body(&text),
             });
         }
-        let parsed: serde_json::Value = serde_json::from_str(&text)
-            .map_err(|e| LlmError::BadResponse(format!("响应不是合法 JSON：{e}")))?;
+        let parsed = parse_http_json(&text, &content_type)?;
         let message = parsed
             .pointer("/choices/0/message")
             .ok_or_else(|| LlmError::BadResponse("响应缺少 choices[0].message".to_string()))?;
@@ -226,15 +251,18 @@ impl OpenAiCompatClient {
             .await
             .map_err(|e| LlmError::Network(e.to_string()))?;
         let status = response.status();
-        let text = response.text().await.map_err(|e| LlmError::BadResponse(e.to_string()))?;
+        let text = response
+            .text()
+            .await
+            .map_err(|e| LlmError::BadResponse(e.to_string()))?;
         if !status.is_success() {
             return Err(LlmError::Api {
                 status: status.as_u16(),
                 body: sanitize_error_body(&text),
             });
         }
-        let parsed: serde_json::Value = serde_json::from_str(&text)
-            .map_err(|e| LlmError::BadResponse(e.to_string()))?;
+        let parsed: serde_json::Value =
+            serde_json::from_str(&text).map_err(|e| LlmError::BadResponse(e.to_string()))?;
         let models = parsed
             .pointer("/data")
             .and_then(|d| d.as_array())
@@ -262,6 +290,35 @@ pub fn join_chat_completions_url(base: &str) -> String {
     join_endpoint(base, "/chat/completions")
 }
 
+fn response_content_type(response: &reqwest::Response) -> String {
+    response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+}
+
+fn parse_http_json(text: &str, content_type: &str) -> Result<serde_json::Value, LlmError> {
+    if text.trim().is_empty() {
+        return Err(LlmError::BadResponse(
+            "模型服务返回了空响应，请检查 API Base URL 是否为接口根路径（通常以 /v1 结尾）。"
+                .to_string(),
+        ));
+    }
+    if content_type.contains("text/html") || text.trim_start().starts_with("<!doctype html") {
+        return Err(LlmError::BadResponse(
+            "API Base URL 指向了网页而不是模型接口，请填写接口根路径（通常以 /v1 结尾）。"
+                .to_string(),
+        ));
+    }
+    serde_json::from_str(text).map_err(|e| {
+        LlmError::BadResponse(format!(
+            "响应不是合法 JSON（Content-Type: {content_type}）：{e}"
+        ))
+    })
+}
+
 /// Server-produced error bodies occasionally leak request payloads; keep only
 /// the first line and strip anything that looks like a key/token.
 fn sanitize_error_body(body: &str) -> String {
@@ -284,8 +341,14 @@ pub fn parse_data_url(url: &str) -> Result<(String, Vec<u8>), LlmError> {
         .ok_or_else(|| LlmError::MalformedImage("缺少 data: 前缀".to_string()))?;
 
     let mime = meta.split(';').next().unwrap_or("").trim().to_lowercase();
-    if !matches!(mime.as_str(), "image/png" | "image/jpeg" | "image/jpg" | "image/webp") {
-        return Err(LlmError::MalformedImage(format!("不支持的图片类型：{:?}（仅支持 PNG / JPEG / WebP）", mime)));
+    if !matches!(
+        mime.as_str(),
+        "image/png" | "image/jpeg" | "image/jpg" | "image/webp"
+    ) {
+        return Err(LlmError::MalformedImage(format!(
+            "不支持的图片类型：{:?}（仅支持 PNG / JPEG / WebP）",
+            mime
+        )));
     }
 
     // base64 crate "standard" alphabet; tolerate optional newlines.
@@ -313,7 +376,26 @@ mod tests {
             join_chat_completions_url("https://api.openai.com/v1/"),
             "https://api.openai.com/v1/chat/completions"
         );
-        assert_eq!(join_endpoint("http://localhost:11434", "/models"), "http://localhost:11434/models");
+        assert_eq!(
+            join_endpoint("http://localhost:11434", "/models"),
+            "http://localhost:11434/models"
+        );
+    }
+
+    #[test]
+    fn reports_html_as_a_base_url_problem() {
+        let err = parse_http_json("<!doctype html><html></html>", "text/html; charset=utf-8")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("Base URL"), "actionable error: {err}");
+    }
+
+    #[test]
+    fn reports_empty_success_body_clearly() {
+        let err = parse_http_json("  ", "application/json")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("空响应"), "actionable error: {err}");
     }
 
     #[test]

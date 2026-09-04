@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { ChatMessage, ChatResult, ImportImage, Knowledge, Settings, SimilaritySuggestion } from '../types';
-import type { ChatService, ImportService, KnowledgeService, SettingsService } from './interfaces';
+import { save as saveDialog, open as openDialog } from '@tauri-apps/plugin-dialog';
+import type { BackupInspect, BackupRestoreResult, BackupSummary, ChatMessage, ChatResult, ImportImage, Knowledge, Settings, SimilaritySuggestion } from '../types';
+import type { BackupService, ChatService, ImportService, KnowledgeService, SettingsService } from './interfaces';
 
 // Phase 2: the Knowledge store lives in SQLite behind Tauri commands.
 // Data flows React -> KnowledgeService -> invoke -> Rust command -> rusqlite.
@@ -21,6 +22,11 @@ export const knowledgeService: KnowledgeService = {
   },
   async recent(limit = 10): Promise<Knowledge[]> {
     return invoke('knowledge_recent', { limit });
+  },
+  // Irreversible: wipes knowledge_items plus derived tags/topics/FTS and
+  // returns how many items were removed. Guarded by a confirm in Settings.
+  async clear(): Promise<number> {
+    return invoke('knowledge_clear');
   },
 };
 
@@ -134,5 +140,38 @@ export const importService: ImportService = {
       followUps: draft.followUps,
       updatedAt: new Date().toLocaleString(),
     });
+  },
+};
+
+// Backup / Restore — see `src-tauri/src/backup.rs` for the file format and
+// the security model (no API Key, no transient chat / upload data, atomic
+// file replace with a safety-snapshot rollback path).
+export const backupService: BackupService = {
+  async pickSavePath(suggestedName: string): Promise<string | null> {
+    const result = await saveDialog({
+      title: '保存 Interview Kit 备份',
+      defaultPath: suggestedName,
+      filters: [{ name: 'Interview Kit Backup', extensions: ['ikbackup'] }],
+    });
+    return typeof result === 'string' ? result : null;
+  },
+  async pickOpenPath(): Promise<string | null> {
+    const result = await openDialog({
+      title: '选择 Interview Kit 备份',
+      multiple: false,
+      directory: false,
+      filters: [{ name: 'Interview Kit Backup', extensions: ['ikbackup'] }],
+    });
+    if (Array.isArray(result)) return result[0] ?? null;
+    return typeof result === 'string' ? result : null;
+  },
+  async create(destinationPath: string): Promise<BackupSummary> {
+    return invoke<BackupSummary>('backup_create', { destinationPath });
+  },
+  async inspect(sourcePath: string): Promise<BackupInspect> {
+    return invoke<BackupInspect>('backup_inspect', { sourcePath });
+  },
+  async restore(sourcePath: string): Promise<BackupRestoreResult> {
+    return invoke<BackupRestoreResult>('backup_restore', { sourcePath });
   },
 };

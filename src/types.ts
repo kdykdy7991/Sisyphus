@@ -8,3 +8,9 @@ export type ChatCitation={knowledgeId:string;question:string};
 export type ChatResult={answer:string;citations:ChatCitation[]};
 export type Settings={apiBaseUrl:string;apiKey:string;chatModel:string;visionModel:string;databaseLocation:string};
 export type ConnectionResult={ok:boolean;message:string};
+
+// Backup / Restore — Knowledge data only. Application configuration is not
+// part of a backup and is not modified by restore.
+export type BackupInspect={formatVersion:number;app:string;createdAt:string;databaseSchemaVersion:number;knowledgeCount:number;domainCount:number};
+export type BackupSummary={path:string;formatVersion:number;createdAt:string;knowledgeCount:number;domainCount:number};
+export type BackupRestoreResult={knowledgeCount:number;domainCount:number};

@@ -1,5 +1,6 @@
 use tauri::State;
 
+use crate::backup;
 use crate::chat;
 use crate::config::{self, ApiConfig, ApiConfigState};
 use crate::db::{self, Db, KnowledgePayload};
@@ -313,4 +314,176 @@ pub fn knowledge_save(state: State<'_, Db>, item: KnowledgePayload) -> Result<Kn
 pub fn knowledge_recent(state: State<'_, Db>, limit: Option<usize>) -> Result<Vec<KnowledgePayload>, String> {
     let conn = state.conn.lock().unwrap();
     db::recent(&conn, limit.unwrap_or(10)).map_err(|e| e.to_string())
+}
+
+/// Delete every knowledge item (plus derived tags / topics / FTS rows).
+/// Returns how many items were removed so the UI can report it. Irreversible —
+/// the Settings page guards this behind an explicit confirm.
+#[tauri::command]
+pub fn knowledge_clear(state: State<'_, Db>) -> Result<usize, String> {
+    let conn = state.conn.lock().unwrap();
+    db::clear(&conn).map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Backup / Restore
+// ---------------------------------------------------------------------------
+
+/// Result of a successful backup, returned to the UI so it can show a
+/// success summary (counts + on-disk path).
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BackupSummary {
+    pub path: String,
+    pub format_version: u16,
+    pub created_at: String,
+    pub knowledge_count: i64,
+    pub domain_count: i64,
+}
+
+/// Build a `.ikbackup` at the user-chosen `destination_path`. The file format
+/// is documented in `backup.rs`. The archive carries only Knowledge data
+/// (`manifest.json` + `database.sqlite`); application configuration is never
+/// read or written here. Safe to call while the application is open: the
+/// snapshot is taken via SQLite's Online Backup API and respects WAL.
+#[tauri::command]
+pub fn backup_create(
+    config_state: State<'_, ApiConfigState>,
+    destination_path: String,
+) -> Result<BackupSummary, String> {
+    let dest = std::path::PathBuf::from(&destination_path);
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let manifest = backup::create(&config_state.db_path, &dest)
+        .map_err(|e| e.to_string())?;
+    Ok(BackupSummary {
+        path: dest.display().to_string(),
+        format_version: manifest.format_version,
+        created_at: manifest.created_at,
+        knowledge_count: manifest.knowledge_count,
+        domain_count: manifest.domain_count,
+    })
+}
+
+/// Read a `.ikbackup` and return a preview (counts + manifest fields) without
+/// mutating any state. Used by the Restore flow to confirm with the user
+/// before overwriting the live database.
+#[tauri::command]
+pub fn backup_inspect(source_path: String) -> Result<backup::InspectReport, String> {
+    let path = std::path::PathBuf::from(&source_path);
+    backup::inspect(&path).map_err(|e| e.to_string())
+}
+
+/// Restore from a `.ikbackup`. The flow:
+///
+/// 1. Validate the archive (read manifest, open the embedded SQLite in a temp
+///    file). If any check fails, no live state is touched.
+/// 2. Lock the live DB mutex. Create a safety snapshot of the live
+///    database via `snapshot_live_to_file`. From now on we have a rollback
+///    target.
+/// 3. Replace the live DB file with the embedded SQLite (atomic rename in
+///    the same directory). WAL sidecars are dropped so the new connection
+///    starts with a clean WAL.
+/// 4. Replace the connection inside the Mutex with a freshly opened
+///    connection at the new file, then run migrations + FTS rebuild.
+///
+/// Application configuration (apiBaseUrl, apiKey, chatModel, visionModel,
+/// databaseLocation) is intentionally NOT touched by restore — the target
+/// machine keeps whatever it had before. Settings persistence is left
+/// entirely to the regular Settings save flow.
+///
+/// Any failure between step 2 and step 4 rolls back: copy the safety
+/// snapshot back to the live path and reopen the live connection. The
+/// pre-restore database is recovered.
+#[tauri::command]
+pub fn backup_restore(
+    db: State<'_, Db>,
+    config_state: State<'_, ApiConfigState>,
+    source_path: String,
+) -> Result<backup::RestoreOutcome, String> {
+    let archive = std::path::PathBuf::from(&source_path);
+
+    // 1. Validate (no live state touched).
+    let db_bytes = backup::validate_archive(&archive).map_err(|e| e.to_string())?;
+
+    // 2. Safety snapshot.
+    let safety_path = std::env::temp_dir().join(format!(
+        "interview-kit-safety-{}.sqlite",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    {
+        let conn = db.conn.lock().unwrap();
+        if let Err(e) = backup::snapshot_live_to_file(&conn, &safety_path) {
+            return Err(e.to_string());
+        }
+    }
+
+    // From here on, any error must roll back.
+    let outcome: Result<backup::RestoreOutcome, String> = (|| {
+        // 3. Replace the live DB file.
+        backup::replace_live_db_with(&db_bytes, &config_state.db_path, &safety_path)
+            .map_err(|e| e.to_string())?;
+
+        // 4. Reopen the live connection at the new file, migrate, rebuild FTS.
+        let mut guard = db.conn.lock().unwrap();
+        let new_conn = rusqlite::Connection::open(&config_state.db_path)
+            .map_err(|e| e.to_string())?;
+        // Run the migrations on the *new* connection. They are idempotent
+        // and will bring older schemas up to current; the FTS index is
+        // always rebuilt from primary data so we never trust the backup's
+        // derived `knowledge_fts` table.
+        db::after_restore(&new_conn).map_err(|e| e.to_string())?;
+        *guard = new_conn;
+        drop(guard);
+
+        // Read final counts for the UI summary.
+        let conn = db.conn.lock().unwrap();
+        let knowledge_count: i64 = conn
+            .query_row("SELECT count(*) FROM knowledge_items", [], |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+        let domain_count: i64 = conn
+            .query_row(
+                "SELECT count(DISTINCT domain) FROM knowledge_items",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(backup::RestoreOutcome {
+            knowledge_count,
+            domain_count,
+        })
+    })();
+
+    // Best-effort safety cleanup on either path.
+    if outcome.is_ok() {
+        let _ = std::fs::remove_file(&safety_path);
+    } else {
+        // Roll back: copy the safety snapshot back over the live file and
+        // reopen the connection. We do not surface a rollback error — the
+        // original error is what the user needs to see. The rollback can
+        // still fail; in that pathological case the on-disk DB may be in
+        // an unknown state, but the original `outcome` already carries a
+        // user-facing message.
+        if let Err(rb_err) =
+            backup::rollback_to_safety(&config_state.db_path, &safety_path)
+        {
+            eprintln!(
+                "[interview-kit] restore rollback failed: {}",
+                rb_err
+            );
+        } else {
+            // Reopen the live connection against the rolled-back file.
+            if let Ok(mut guard) = db.conn.lock() {
+                if let Ok(new_conn) = rusqlite::Connection::open(&config_state.db_path) {
+                    *guard = new_conn;
+                }
+            }
+        }
+        let _ = std::fs::remove_file(&safety_path);
+    }
+    outcome
 }
