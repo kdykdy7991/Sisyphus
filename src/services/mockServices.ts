@@ -13,15 +13,18 @@ export const knowledgeService: KnowledgeService = {
   async get(id) { return knowledge.find(item => item.id === id); },
   async search(query) { const q = query.toLowerCase(); return knowledge.filter(item => [item.question, item.answer, item.domain, item.topic, ...item.tags].join(' ').toLowerCase().includes(q)); },
   async save(item) { const index = knowledge.findIndex(entry => entry.id === item.id); if (index >= 0) knowledge[index] = item; else knowledge = [item, ...knowledge]; return item; },
+  async recent(limit = 10) { return [...knowledge].slice(0, limit); },
 };
 export const importService: ImportService = {
-  async extract(images, mode, onProgress) {
+  async extract(images, onProgress) {
     let next: ImportImage[] = images.map(image => ({ ...image, status: 'queued' })); onProgress(next); await wait(550);
     next = next.map(image => ({ ...image, status: 'extracting' as const })); onProgress(next); await wait(950);
-    next = next.map((image, index) => ({ ...image, status: 'completed' as const, drafts: [makeDraft(image, 0), ...((mode === 'continuous' || index === 0) ? [makeDraft(image, 1)] : [])] })); onProgress(next); await wait(350);
+    next = next.map((image, index) => ({ ...image, status: 'completed' as const, drafts: [makeDraft(image, index)] })); onProgress(next); await wait(350);
     next = next.map(image => ({ ...image, status: 'review' as const })); onProgress(next); return next;
   },
   async confirm(items) { for (const item of items) await knowledgeService.save({ ...item, id: `knowledge-${Date.now()}-${Math.random().toString(16).slice(2)}`, updatedAt: new Date().toLocaleString() }); },
+  async suggestSimilarity() { return null; }, // mock: no real Similarity
+  async updateExisting(draft, existingId) { const existing = await knowledgeService.get(existingId); if (!existing) return; await knowledgeService.save({ ...existing, question: draft.question, answer: draft.answer, domain: draft.domain, topic: draft.topic, tags: draft.tags, followUps: draft.followUps, updatedAt: new Date().toLocaleString() }); },
 };
 export const chatService: ChatService = {
   async ask(question, scope, _history: ChatMessage[]) {
@@ -30,4 +33,4 @@ export const chatService: ChatService = {
   },
 };
 let settings: Settings = { apiBaseUrl: 'https://api.openai.com/v1', apiKey: '', chatModel: 'gpt-5', visionModel: 'gpt-5', databaseLocation: '~/Library/Application Support/Interview Kit/interview.db' };
-export const settingsService: SettingsService = { async get() { return { ...settings }; }, async save(value) { settings = { ...value }; await wait(250); }, async testConnection() { await wait(800); return true; } };
+export const settingsService: SettingsService = { async get() { return { ...settings }; }, async save(value) { settings = { ...value }; await wait(250); }, async testConnection() { await wait(800); return { ok: true, message: 'Mock 模式下无法测试真实连接。' }; } };

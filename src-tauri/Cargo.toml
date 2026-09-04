@@ -9,6 +9,9 @@ edition = "2021"
 name = "interview_kit_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -16,3 +19,8 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+jieba-rs = "0.10"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }

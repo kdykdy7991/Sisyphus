@@ -1,2 +1,50 @@
+mod db;
+mod commands;
+mod config;
+mod llm;
+mod vision;
+mod similarity;
+mod chat;
+mod tokenizer;
+
+use tauri::Manager;
+use config::ApiConfigState;
+use db::Db;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() { tauri::Builder::default().run(tauri::generate_context!()).expect("error while running Interview Kit"); }
+pub fn run() {
+    tauri::Builder::default()
+        .setup(|app| {
+            let path = db::resolve_db_path(app.path().app_data_dir()?)?;
+            let conn = db::open(&path)?;
+            let trigram = db::init(&conn)?;
+            app.manage(Db {
+                conn: std::sync::Mutex::new(conn),
+                trigram,
+            });
+            let data_dir = app.path().app_data_dir()?;
+            let db_location = path.display().to_string();
+            let api_cfg = config::load(&data_dir, &db_location);
+            app.manage(ApiConfigState {
+                data_dir: data_dir.clone(),
+                inner: std::sync::Mutex::new(api_cfg),
+            });
+            eprintln!("[interview-kit] database ready at {} (trigram_fts={})", db_location, trigram);
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            commands::knowledge_list,
+            commands::knowledge_get,
+            commands::knowledge_search,
+            commands::knowledge_save,
+            commands::knowledge_recent,
+            commands::settings_get,
+            commands::settings_save,
+            commands::settings_test_connection,
+            commands::vision_extract,
+            commands::analyze_similarity,
+            commands::knowledge_chat,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running Interview Kit");
+}

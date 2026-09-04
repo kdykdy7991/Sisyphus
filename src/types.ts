@@ -1,5 +1,10 @@
-export type Knowledge={id:string;question:string;answer:string;domain:string;topic:string;tags:string[];followUps:string[];relatedIds:string[];source:string;createdAt:string;updatedAt:string;favorite?:boolean};
-export type ImportStatus='ready'|'queued'|'extracting'|'completed'|'review';
-export type ImportImage={id:string;name:string;url:string;status:ImportStatus;drafts:Knowledge[]};
+export type Knowledge={id:string;question:string;answer:string;domain:string;topic:string;tags:string[];followUps:string[];relatedIds:string[];source:string;createdAt:string;updatedAt:string;favorite?:boolean;lastReadAt?:string;similarity?:SimilaritySuggestion};
+export type SimilarityRelation='SAME'|'RELATED'|'NONE';
+export type SimilaritySuggestion={relation:SimilarityRelation;knowledgeId:string|null;reason:string;matchedQuestion?:string;matchedDomain?:string;matchedTopic?:string};
+export type ImportStatus='ready'|'queued'|'extracting'|'completed'|'failed'|'review';
+export type ImportImage={id:string;name:string;url:string;status:ImportStatus;drafts:Knowledge[];error?:string};
 export type ChatMessage={id:string;role:'user'|'assistant';content:string;citations?:string[]};
+export type ChatCitation={knowledgeId:string;question:string};
+export type ChatResult={answer:string;citations:ChatCitation[]};
 export type Settings={apiBaseUrl:string;apiKey:string;chatModel:string;visionModel:string;databaseLocation:string};
+export type ConnectionResult={ok:boolean;message:string};
