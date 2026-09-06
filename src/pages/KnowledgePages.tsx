@@ -22,18 +22,129 @@ import { Button, Input, Tag, Textarea, Empty, Spinner } from '../components/UI';
 import { Drawer } from '../components/Drawer';
 import { useMediaQuery } from '../hooks/useMediaQuery';
 
-const renderAnswer = (text: string) =>
-  text
-    .split('\n')
-    .map((line, i) =>
-      line.startsWith('## ') ? (
-        <h2 key={i}>{line.slice(3)}</h2>
-      ) : line ? (
-        <p key={i}>{line}</p>
-      ) : (
-        <br key={i} />
-      )
-    );
+const renderAnswer = (text: string) => {
+  // Minimal markdown-ish renderer for the Vision-extracted `answer` field.
+  // The system prompt instructs the model to lay out answers with headings,
+  // ordered/unordered lists, blank-line paragraph breaks, and 2-4 space
+  // indented sub-explanations. We only handle exactly those shapes:
+  //   - `## `      -> <h2>
+  //   - `1. ` ...  -> <ol><li>  (consecutive ordered items group)
+  //   - `- ` ...   -> <ul><li>  (consecutive unordered items group)
+  //   - indented   -> a small muted <p> attached to the previous list item
+  //   - blank line -> <br> gap
+  //   - anything else -> <p>
+  // We deliberately do not pull in a markdown library; the model output is
+  // intentionally simple and bounded by the prompt.
+  const lines = text.split('\n');
+  const out: React.ReactNode[] = [];
+  let key = 0;
+  let i = 0;
+  const isOrdered = (s: string) => /^\d+\.\s+/.test(s);
+  const isUnordered = (s: string) => /^[-*]\s+/.test(s);
+  const isIndent = (s: string) => /^[ \t]+\S/.test(s);
+  const stripOrdered = (s: string) => s.replace(/^\d+\.\s+/, '');
+  const stripUnordered = (s: string) => s.replace(/^[-*]\s+/, '');
+
+  while (i < lines.length) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    if (trimmed === '') {
+      out.push(<br key={key++} />);
+      i++;
+      continue;
+    }
+
+    if (line.startsWith('## ')) {
+      out.push(<h2 key={key++}>{line.slice(3).trim()}</h2>);
+      i++;
+      continue;
+    }
+
+    if (isOrdered(trimmed)) {
+      const items: { main: string; sub: string[] }[] = [];
+      while (i < lines.length) {
+        const cur = lines[i];
+        const curTrim = cur.trim();
+        if (curTrim === '') break;
+        if (isOrdered(curTrim)) {
+          items.push({ main: stripOrdered(curTrim), sub: [] });
+          i++;
+          continue;
+        }
+        if (items.length && isIndent(cur)) {
+          items[items.length - 1].sub.push(curTrim);
+          i++;
+          continue;
+        }
+        break;
+      }
+      out.push(
+        <ol key={key++}>
+          {items.map((it, idx) => (
+            <li key={idx}>
+              {it.main}
+              {it.sub.length > 0 && (
+                <p className="sub">{it.sub.join(' ')}</p>
+              )}
+            </li>
+          ))}
+        </ol>
+      );
+      continue;
+    }
+
+    if (isUnordered(trimmed)) {
+      const items: { main: string; sub: string[] }[] = [];
+      while (i < lines.length) {
+        const cur = lines[i];
+        const curTrim = cur.trim();
+        if (curTrim === '') break;
+        if (isUnordered(curTrim)) {
+          items.push({ main: stripUnordered(curTrim), sub: [] });
+          i++;
+          continue;
+        }
+        if (items.length && isIndent(cur)) {
+          items[items.length - 1].sub.push(curTrim);
+          i++;
+          continue;
+        }
+        break;
+      }
+      out.push(
+        <ul key={key++}>
+          {items.map((it, idx) => (
+            <li key={idx}>
+              {it.main}
+              {it.sub.length > 0 && (
+                <p className="sub">{it.sub.join(' ')}</p>
+              )}
+            </li>
+          ))}
+        </ul>
+      );
+      continue;
+    }
+
+    // Plain paragraph: gather consecutive non-blank, non-list, non-heading
+    // lines into a single <p> so we don't get one <p> per sentence.
+    const para: string[] = [line];
+    i++;
+    while (i < lines.length) {
+      const cur = lines[i];
+      const curTrim = cur.trim();
+      if (curTrim === '') break;
+      if (curTrim.startsWith('## ')) break;
+      if (isOrdered(curTrim) || isUnordered(curTrim)) break;
+      para.push(cur);
+      i++;
+    }
+    out.push(<p key={key++}>{para.join(' ')}</p>);
+  }
+
+  return out;
+};
 
 // 主题/领域筛选面板的内容。横屏与桌面仍放在常驻左栏；竖屏放进左侧抽屉，
 // 两份渲染共用同一份数据与交互，不做 CSS 隐藏式的功能阉割。
