@@ -208,10 +208,7 @@ impl OpenAiCompatClient {
                 message: "响应缺少 message.content".to_string(),
                 body: Some(truncate_for_log(&text)),
             })?;
-        serde_json::from_str(content).map_err(|e| LlmError::BadResponse {
-            message: format!("内容不是合法 JSON：{e}"),
-            body: Some(truncate_for_log(content)),
-        })
+        parse_assistant_json(content)
     }
 
     /// Standard OpenAI-compatible tool-calling chat completion.
@@ -411,6 +408,31 @@ fn strip_thinking_block(text: &str) -> String {
         // naturally; the body still shows up in the log.
         None => text.to_string(),
     }
+}
+
+/// Parse structured JSON carried in `choices[0].message.content`.
+///
+/// Some OpenAI-compatible reasoning models put `<think>...</think>` in the
+/// assistant content itself. The outer HTTP response is still valid JSON, so
+/// stripping only in `parse_http_json` cannot fix that case. Normalize the
+/// nested content immediately before parsing the caller's structured payload.
+fn parse_assistant_json(content: &str) -> Result<serde_json::Value, LlmError> {
+    let normalized = strip_thinking_block(content);
+    let trimmed = normalized.trim();
+    if trimmed.is_empty() {
+        return Err(LlmError::BadResponse {
+            message: "模型返回的 message.content 为空或仅包含推理内容，没有结构化 JSON。"
+                .to_string(),
+            body: Some(truncate_for_log(content)),
+        });
+    }
+
+    serde_json::from_str(trimmed).map_err(|e| LlmError::BadResponse {
+        message: format!("内容不是合法 JSON：{e}"),
+        // Keep the original provider content in diagnostics so the thinking
+        // wrapper remains visible when a different malformed shape appears.
+        body: Some(truncate_for_log(content)),
+    })
 }
 
 /// Build a one-line preview of the body for the failure summary line.
@@ -621,6 +643,29 @@ mod tests {
         // Must round-trip through serde_json.
         let v: serde_json::Value = serde_json::from_str(&out).expect("valid JSON");
         assert_eq!(v["items"][0]["question"], "Q");
+    }
+
+    #[test]
+    fn parse_assistant_json_handles_minimax_thinking_prefix() {
+        let content = "<think>The image contains one question.</think>\n\n{\"items\":[{\"question\":\"Q\",\"answer\":\"A\"}]}";
+        let value = parse_assistant_json(content).expect("nested content parses");
+        assert_eq!(value["items"][0]["question"], "Q");
+    }
+
+    #[test]
+    fn parse_assistant_json_preserves_plain_json() {
+        let value = parse_assistant_json(r#"{"items":[]}"#).expect("plain JSON parses");
+        assert_eq!(value["items"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn parse_assistant_json_rejects_thinking_only_content_clearly() {
+        let err = parse_assistant_json("<think>No final answer</think>").unwrap_err();
+        let message = match err {
+            LlmError::BadResponse { message, .. } => message,
+            other => panic!("expected BadResponse, got {other:?}"),
+        };
+        assert!(message.contains("仅包含推理内容"), "clear error: {message}");
     }
 
     /// Bodies that have no leading thinking block must be returned
