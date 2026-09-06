@@ -366,12 +366,22 @@ fn parse_http_json(text: &str, content_type: &str) -> Result<serde_json::Value, 
     // When the body has no leading thinking block, this is a no-op.
     let text = strip_thinking_block(text);
 
-    serde_json::from_str(&text).map_err(|e| LlmError::BadResponse {
-        message: format!("响应不是合法 JSON（Content-Type: {content_type}）：{e}"),
-        // Log the (possibly stripped) body — what we actually tried to
-        // parse. If stripping produced an empty string, the log banner
-        // will surround nothing, which is itself a useful signal.
-        body: Some(truncate_for_log(&text)),
+    serde_json::from_str(&text).map_err(|e| {
+        // Build a richer message that includes a body preview so future
+        // failures can be diagnosed from a single log line without
+        // opening the full body banner. The preview is truncated at
+        // 200 chars + collapsed to a single line so it stays
+        // grep-friendly.
+        let preview = body_preview(&text);
+        LlmError::BadResponse {
+            message: format!(
+                "响应不是合法 JSON（Content-Type: {content_type}）：{e} | body 预览: {preview}"
+            ),
+            // Log the (possibly stripped) body — what we actually tried to
+            // parse. If stripping produced an empty string, the log banner
+            // will surround nothing, which is itself a useful signal.
+            body: Some(truncate_for_log(&text)),
+        }
     })
 }
 
@@ -379,14 +389,19 @@ fn parse_http_json(text: &str, content_type: &str) -> Result<serde_json::Value, 
 /// the input unchanged when there is no such block, so the function is safe
 /// to call unconditionally.
 ///
-/// The match is intentionally literal and not regex-based: we only act on a
-/// `<think>` opening tag at the very start of the (trimmed) body, and we
-/// pair it with the *first* `</think>` after that. This handles the common
-/// single-block case and is conservative — anything weirder (malformed
+/// The match is intentionally literal and not regex-based: we strip an
+/// optional UTF-8 BOM, then a `<think>` opening tag at the very start of
+/// the (trimmed) body, and pair it with the *first* `</think>` after that.
+/// This handles the common single-block case plus a few wrappers (BOM,
+/// leading whitespace) and is conservative — anything weirder (malformed
 /// tags, interleaved text) falls through to the JSON parser, which will
 /// fail with a normal parse error and surface in the log.
 fn strip_thinking_block(text: &str) -> String {
-    let trimmed = text.trim_start();
+    // Strip a leading UTF-8 BOM (U+FEFF) if present — `str::trim_start`
+    // does NOT treat it as whitespace, so we have to remove it ourselves.
+    const BOM: &str = "\u{FEFF}";
+    let after_bom = text.strip_prefix(BOM).unwrap_or(text);
+    let trimmed = after_bom.trim_start();
     if !trimmed.starts_with("<think>") {
         return text.to_string();
     }
@@ -395,6 +410,27 @@ fn strip_thinking_block(text: &str) -> String {
         // Malformed: opening tag but no closing. Let the JSON parser fail
         // naturally; the body still shows up in the log.
         None => text.to_string(),
+    }
+}
+
+/// Build a one-line preview of the body for the failure summary line.
+/// Truncates to 200 chars, collapses newlines to spaces, escapes
+/// non-printable bytes, and ellipsises when truncated. The result is meant
+/// to be human-readable in a log line, not machine-parseable — the full
+/// body still goes in the `body` field of `BadResponse` and the diagnostic
+/// log file under `--- response body ---`.
+fn body_preview(text: &str) -> String {
+    const MAX: usize = 200;
+    let s: String = text
+        .chars()
+        .take(MAX)
+        .map(|c| if c.is_control() && c != '\t' { ' ' } else { c })
+        .collect();
+    let collapsed: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.chars().count() > MAX {
+        format!("{collapsed}…")
+    } else {
+        collapsed
     }
 }
 
@@ -655,5 +691,49 @@ mod tests {
         };
         assert!(msg.contains("不是合法 JSON"));
         assert_eq!(body.as_deref(), Some(""));
+    }
+
+    /// A UTF-8 BOM (U+FEFF) before `<think>` must be tolerated — some
+    /// upstream proxies prepend it. The previous version used `trim_start`
+    /// which does NOT strip BOM, so this case would have escaped the
+    /// strip and reached serde_json as `\u{FEFF}<think>...`.
+    #[test]
+    fn strip_thinking_block_handles_utf8_bom() {
+        let body = "\u{FEFF}<think>with BOM</think>\n\n{\"items\":[]}";
+        let out = strip_thinking_block(body);
+        assert!(out.starts_with('{'), "BOM + think stripped cleanly: {out:?}");
+        serde_json::from_str::<serde_json::Value>(&out).expect("valid JSON after BOM strip");
+    }
+
+    /// The error summary line must include a one-line preview of the body
+    /// so a future failure can be diagnosed from a single log line. The
+    /// preview collapses whitespace and ellipsises long bodies.
+    #[test]
+    fn parse_http_json_failure_message_includes_body_preview() {
+        let body = "<think>Thinking\nspans\nmultiple lines</think>\n\nnot valid json";
+        let err = parse_http_json(body, "application/json").unwrap_err();
+        let msg = match err {
+            LlmError::BadResponse { message, .. } => message,
+            other => panic!("expected BadResponse, got {other:?}"),
+        };
+        assert!(msg.contains("body 预览"), "summary mentions preview: {msg}");
+        assert!(
+            msg.contains("not valid json"),
+            "preview shows the post-strip body: {msg}"
+        );
+    }
+
+    /// `body_preview` itself: truncates, collapses whitespace, ellipsises.
+    #[test]
+    fn body_preview_truncates_and_collapses() {
+        let long = "a\nb\tc   d\n\n\n  e  "; // control char + many whitespace
+        let p = body_preview(long);
+        assert!(!p.contains('\n'), "no newlines in preview: {p:?}");
+        assert!(!p.contains('\t'), "no tabs in preview: {p:?}");
+        assert!(p.starts_with("a b c d e"), "whitespace collapsed: {p}");
+        let huge = "x".repeat(500);
+        let p2 = body_preview(&huge);
+        assert!(p2.ends_with('…'), "long input is ellipsised: {p2}");
+        assert!(p2.chars().count() <= 201, "preview stays short");
     }
 }
