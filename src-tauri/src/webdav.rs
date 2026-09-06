@@ -513,29 +513,10 @@ impl WebDavTransport for ReqwestWebDavClient {
 
     fn ensure_dir(&self) -> BoxFuture<'_, Result<(), WebDavError>> {
         Box::pin(async move {
-            let response = self
-                .send(
-                    self.auth(
-                        self.http
-                            .request(mkcol_method(), self.remote_dir_url()),
-                    ),
-                )
-                .await?;
-            let status = response.status();
-            match status.as_u16() {
-                // 200/201 = created, 405 = already exists (RFC 4918).
-                200..=299 | 405 => Ok(()),
-                401 | 407 => Err(WebDavError::AuthenticationFailed),
-                403 => Err(WebDavError::PermissionDenied),
-                409 => Err(WebDavError::Protocol {
-                    status: 409,
-                    message: "父目录不存在，无法创建 sync 目录。".to_string(),
-                }),
-                other => Err(WebDavError::Protocol {
-                    status: other,
-                    message: "创建 sync 目录失败。".to_string(),
-                }),
-            }
+            // Create `<root>/sync/`, making any missing intermediate
+            // collections (e.g. a user-configured root like `…/面试资料`)
+            // along the way. WebDAV servers do NOT auto-create parents.
+            self.mkcol(REMOTE_DIR).await
         })
     }
 
@@ -587,25 +568,58 @@ impl WebDavTransport for ReqwestWebDavClient {
         })
     }
 
+    /// Create a collection, building every intermediate collection from the
+    /// authority root down. WebDAV servers do NOT auto-create parents, so a
+    /// configured root like `…/面试资料` must be MKCOL'd before
+    /// `…/面试资料/sync`. Each segment is MKCOL'd in turn; `405` (already a
+    /// collection, or a server-managed root that must not be created) is
+    /// treated as success, while auth/permission errors are always fatal.
     fn mkcol<'a>(&'a self, path: &'a str) -> BoxFuture<'a, Result<(), WebDavError>> {
         Box::pin(async move {
-            let response = self
-                .send(self.auth(self.http.request(mkcol_method(), self.url_for(path))))
-                .await?;
-            let status = response.status();
-            match status.as_u16() {
-                200..=299 | 405 => Ok(()),
-                401 | 407 => Err(WebDavError::AuthenticationFailed),
-                403 => Err(WebDavError::PermissionDenied),
-                409 => Err(WebDavError::Protocol {
-                    status: 409,
-                    message: "父目录不存在。".to_string(),
-                }),
-                other => Err(WebDavError::Protocol {
-                    status: other,
-                    message: "创建目录失败。".to_string(),
-                }),
+            let full = self.url_for(path);
+            let parsed = match reqwest::Url::parse(&full) {
+                Ok(u) => u,
+                Err(e) => {
+                    return Err(WebDavError::InvalidUrl(format!("无法解析同步地址：{e}")));
+                }
+            };
+            let origin = parsed.origin().ascii_serialization();
+            let segments: Vec<String> = parsed
+                .path_segments()
+                .map(|s| s.map(|x| x.to_string()).collect())
+                .unwrap_or_default();
+            let mut cumulative = origin;
+            let last = segments.len().saturating_sub(1);
+            for (i, seg) in segments.into_iter().enumerate() {
+                if seg.is_empty() {
+                    continue;
+                }
+                cumulative = format!("{}/{}", cumulative, seg);
+                let response = self
+                    .send(self.auth(self.http.request(mkcol_method(), cumulative.clone())))
+                    .await?;
+                match response.status().as_u16() {
+                    200..=299 | 405 => {}
+                    401 | 407 => return Err(WebDavError::AuthenticationFailed),
+                    403 if i == last => return Err(WebDavError::PermissionDenied),
+                    409 if i == last => {
+                        return Err(WebDavError::Protocol {
+                            status: 409,
+                            message: "父目录不存在，请确认 WebDAV 根目录可写、或先在服务器端创建该目录。".to_string(),
+                        })
+                    }
+                    other if i == last => {
+                        return Err(WebDavError::Protocol {
+                            status: other,
+                            message: "创建目录失败。".to_string(),
+                        })
+                    }
+                    // Intermediate segment that the server will not let us
+                    // MKCOL (servlet root, already exists): best effort, skip.
+                    _ => {}
+                }
             }
+            Ok(())
         })
     }
 }
@@ -687,7 +701,15 @@ async fn probe<T: WebDavTransport + ?Sized>(transport: &T) -> Result<Vec<String>
     };
 
     // 2. The real check: URL reachable + WebDAV endpoint + credentials.
-    transport.propfind("").await?;
+    // A root that does not exist yet is not fatal here — `mkcol` below
+    // creates it (and any intermediate collections) on demand.
+    match transport.propfind("").await {
+        Ok(()) => {}
+        Err(WebDavError::RemoteNotFound) => {}
+        Err(WebDavError::AuthenticationFailed) => return Err(WebDavError::AuthenticationFailed),
+        Err(WebDavError::PermissionDenied) => return Err(WebDavError::PermissionDenied),
+        Err(e) => return Err(e),
+    }
 
     // 3. Make sure the snapshot directory is usable.
     match transport.propfind(REMOTE_DIR).await {
