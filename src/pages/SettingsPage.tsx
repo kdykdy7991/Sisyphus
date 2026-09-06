@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useApp } from '../AppContext';
-import { backupService, knowledgeService, settingsService } from '../services';
-import type { BackupInspect, Settings } from '../types';
+import { backupService, knowledgeService, settingsService, webdavService } from '../services';
+import type { BackupInspect, Settings, WebDavConfig } from '../types';
 import { AlertCircle, Check, Database, Download, Eye, EyeOff, FolderOpen, LoaderCircle, RotateCcw, Trash2 } from '../components/Icons';
 import { Button, Input } from '../components/UI';
 
@@ -34,8 +34,15 @@ export function SettingsPage() {
   const [confirmClear, setConfirmClear] = useState(false);
   const [clearing, setClearing] = useState(false);
 
+  // WebDAV sync transport (device config; password is never echoed back).
+  const [wd, setWd] = useState<WebDavConfig>({ url: '', username: '', password: '' });
+  const [wdShow, setWdShow] = useState(false);
+  const [wdBusy, setWdBusy] = useState<'save' | 'test' | 'sync' | null>(null);
+  const [wdFlash, setWdFlash] = useState<Flash>(null);
+
   useEffect(() => {
     settingsService.get().then(setS);
+    webdavService.getConfig().then(setWd);
   }, []);
 
   if (!s) return null;
@@ -146,6 +153,69 @@ export function SettingsPage() {
     } catch (e) {
       setFlash({ kind: 'err', text: `恢复失败：${String(e)}` });
       setRestore({ kind: 'idle' });
+    }
+  };
+
+  const setWdField = (k: keyof WebDavConfig, v: string) => setWd({ ...wd, [k]: v });
+
+  const saveWd = async () => {
+    setWdBusy('save');
+    setWdFlash(null);
+    try {
+      await webdavService.saveConfig(wd);
+      setWdFlash({ kind: 'ok', text: '已保存 WebDAV 配置。' });
+    } catch (e) {
+      setWdFlash({ kind: 'err', text: `保存失败：${String(e)}` });
+    } finally {
+      setWdBusy(null);
+    }
+  };
+
+  // Probe with the *saved* config, so a freshly typed password is persisted
+  // first. The backend reads `webdav.json`, not the form.
+  const testWd = async () => {
+    setWdBusy('test');
+    setWdFlash(null);
+    try {
+      await webdavService.saveConfig(wd);
+      const r = await webdavService.testConnection();
+      setWdFlash({
+        kind: r.success ? 'ok' : 'err',
+        text: r.success
+          ? `连接成功（${r.latencyMs}ms）：${r.message}`
+          : `连接失败（${r.errorKind || '未知错误'}）：${r.message}`,
+      });
+    } catch (e) {
+      setWdFlash({ kind: 'err', text: `测试失败：${String(e)}` });
+    } finally {
+      setWdBusy(null);
+    }
+  };
+
+  const syncWd = async () => {
+    setWdBusy('sync');
+    setWdFlash(null);
+    try {
+      // Persist first so freshly typed credentials are used by the sync.
+      await webdavService.saveConfig(wd);
+      const r = await webdavService.sync();
+      const parts: string[] = [];
+      if (r.remoteExisted) {
+        parts.push(`已从远端合并 ${r.downloadedItemCount} 条`);
+      } else {
+        parts.push(`远端为空，已上传本机 ${r.uploadedItemCount} 条（首次同步）`);
+      }
+      parts.push(
+        `新增 ${r.stats.inserted} · 更新 ${r.stats.updated} · 删除 ${r.stats.deleted} · 跳过 ${r.stats.skipped}`,
+      );
+      if (r.retryCount > 0) parts.push(`遇到 ${r.retryCount} 次并发冲突已自动解决`);
+      setWdFlash({ kind: 'ok', text: `同步完成：${parts.join('，')}。` });
+      // Pull the merged knowledge into the live UI so other pages reflect it.
+      await refresh();
+    } catch (e) {
+      setWdFlash({ kind: 'err', text: `同步失败：${String(e)}` });
+    } finally {
+      setWdBusy(null);
     }
   };
 
@@ -261,6 +331,67 @@ export function SettingsPage() {
             </button>
           </div>
           {flash && <p className={`conn-msg ${flash.kind === 'err' ? 'err' : 'ok'}`} style={{ marginTop: 12 }}>{flash.text}</p>}
+        </section>
+
+        <section>
+          <div className="settings-heading">
+            <h2>多设备同步</h2>
+            <p>通过 WebDAV 在多台设备间同步知识库。WebDAV 只是同步介质——每台设备都拥有完整本地知识库，同步采用「完整快照 + 合并」，互不覆盖。账号密码仅保存在本机，不会进入同步文件或备份。</p>
+          </div>
+          <div className="form-grid">
+            <label style={{ gridColumn: '1 / -1' }}>
+              WebDAV 地址
+              <Input
+                value={wd.url}
+                placeholder="https://dav.example.com/remote.php/dav/files/用户名/Sisyphus"
+                onChange={(e) => setWdField('url', e.target.value)}
+              />
+            </label>
+            <label>
+              用户名
+              <Input value={wd.username} onChange={(e) => setWdField('username', e.target.value)} />
+            </label>
+            <label>
+              密码 / 应用令牌
+              <div className="password">
+                <Input
+                  type={wdShow ? 'text' : 'password'}
+                  value={wd.password}
+                  placeholder="留空表示保持不变"
+                  onChange={(e) => setWdField('password', e.target.value)}
+                />
+                <button onClick={() => setWdShow(!wdShow)}>{wdShow ? <EyeOff /> : <Eye />}</button>
+              </div>
+            </label>
+            <div className="test-cell">
+              <div className="wd-actions">
+                <Button onClick={saveWd} disabled={wdBusy !== null}>保存配置</Button>
+                <Button onClick={testWd} disabled={wdBusy !== null}>
+                  {wdBusy === 'test' ? (
+                    <>
+                      <LoaderCircle className="spin" /> 测试中
+                    </>
+                  ) : (
+                    '测试连接'
+                  )}
+                </Button>
+                <Button variant="primary" onClick={syncWd} disabled={wdBusy !== null}>
+                  {wdBusy === 'sync' ? (
+                    <>
+                      <LoaderCircle className="spin" /> 同步中
+                    </>
+                  ) : (
+                    '立即同步'
+                  )}
+                </Button>
+              </div>
+              {wdFlash && (
+                <p className={`conn-msg ${wdFlash.kind === 'err' ? 'err' : 'ok'}`} style={{ marginTop: 12 }}>
+                  {wdFlash.text}
+                </p>
+              )}
+            </div>
+          </div>
         </section>
 
         <aside>

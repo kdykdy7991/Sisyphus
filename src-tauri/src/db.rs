@@ -42,6 +42,19 @@ pub fn init(conn: &Connection) -> rusqlite::Result<bool> {
 
 /// Versioned schema setup (PRAGMA user_version).
 ///   1  -> relational tables (topics, knowledge_items, tags, knowledge_tags).
+///   2  -> cross-device sync columns: knowledge_items.sync_id, knowledge_items.deleted_at.
+///         Backfills every pre-existing row with a fresh UUIDv4 sync_id (idempotent),
+///         adds indexes that back both sync lookup and the soft-delete filter. The
+///         v2 step is also safe to re-run when `user_version` has been tampered with:
+///         the `has_column` check skips the ALTER TABLE when the columns already
+///         exist, and the backfill is a no-op once every row carries a non-empty
+///         sync_id.
+///   3  -> UNIQUE constraint on sync_id (partial, non-empty only). The Sync
+///         engine keys identity on sync_id, so the database must reject two
+///         rows from sharing one. The partial predicate skips the (transient)
+///         empty string that `save` uses to ask the server to mint one. This
+///         makes "duplicate sync_id in the snapshot" fail loudly at INSERT
+///         time instead of silently producing ambiguous merge results.
 fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     if version < 1 {
@@ -86,7 +99,69 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             PRAGMA user_version = 1;",
         )?;
     }
+    if version < 2 {
+        // Idempotent column additions: pre-check via PRAGMA table_info so a
+        // re-run on a half-migrated DB (e.g. user_version reset to 0) is safe.
+        if !has_column(conn, "knowledge_items", "sync_id")? {
+            conn.execute_batch(
+                "ALTER TABLE knowledge_items ADD COLUMN sync_id TEXT NOT NULL DEFAULT ''",
+            )?;
+        }
+        if !has_column(conn, "knowledge_items", "deleted_at")? {
+            conn.execute_batch("ALTER TABLE knowledge_items ADD COLUMN deleted_at TEXT")?;
+        }
+        // Backfill sync_id for every row missing one. The WHERE filter is the
+        // idempotency guard: rows that already carry a non-empty sync_id are
+        // left alone, so the second migration pass is a true no-op.
+        let ids: Vec<i64> = conn
+            .prepare("SELECT id FROM knowledge_items WHERE sync_id IS NULL OR sync_id = ''")?
+            .query_map([], |r| r.get(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for id in &ids {
+            let new_id = uuid::Uuid::new_v4().to_string();
+            conn.execute(
+                "UPDATE knowledge_items
+                    SET sync_id = ?1
+                  WHERE id = ?2
+                    AND (sync_id IS NULL OR sync_id = '')",
+                params![new_id, id],
+            )?;
+        }
+        // sync_id lookup index for the merge engine; partial index speeds up the
+        // "active rows" filter used by every read-side query.
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_knowledge_sync_id  ON knowledge_items(sync_id);
+             CREATE INDEX IF NOT EXISTS idx_knowledge_active   ON knowledge_items(deleted_at) WHERE deleted_at IS NULL;",
+        )?;
+        conn.pragma_update(None, "user_version", 2)?;
+    }
+    if version < 3 {
+        // Partial UNIQUE on sync_id. Empty sync_id is a transient state for
+        // `save()` payloads (the server mints one before INSERT); excluding
+        // them keeps that path working while preventing two rows from
+        // accidentally sharing a real sync_id.
+        conn.execute_batch(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_knowledge_sync_id
+                 ON knowledge_items(sync_id) WHERE sync_id != '';",
+        )?;
+        conn.pragma_update(None, "user_version", 3)?;
+    }
     Ok(())
+}
+
+/// True when the named column exists on the named table. Used by the migration
+/// path to keep column additions idempotent when `user_version` cannot be
+/// trusted (manual edits, restored from an older backup, etc.).
+fn has_column(conn: &Connection, table: &str, column: &str) -> rusqlite::Result<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let name: String = row.get(1)?;
+        if name == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// FTS5 tokenizer for the derived index, as a directive string (SQL-wrapped in
@@ -171,10 +246,20 @@ fn init_fts(conn: &Connection) -> rusqlite::Result<bool> {
 #[serde(rename_all = "camelCase")]
 pub struct KnowledgePayload {
     pub id: String,
+    /// Stable, cross-device identity. UUIDv4 string; assigned by `save` when
+    /// the caller leaves it empty. Once assigned, it is preserved across
+    /// updates so the same row can be referenced from any device.
+    #[serde(default)]
+    pub sync_id: String,
+    #[serde(default)]
     pub question: String,
+    #[serde(default)]
     pub answer: String,
+    #[serde(default)]
     pub domain: String,
+    #[serde(default)]
     pub topic: String,
+    #[serde(default)]
     pub tags: Vec<String>,
     #[serde(default)]
     pub follow_ups: Vec<String>,
@@ -190,6 +275,11 @@ pub struct KnowledgePayload {
     pub favorite: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_read_at: Option<String>,
+    /// Soft-delete tombstone. When set, the row is hidden from the UI but
+    /// retained on disk so a cross-device sync can still propagate the
+    /// deletion to peers. `None` = active; `Some(ts)` = deleted at that time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deleted_at: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -197,9 +287,14 @@ pub struct KnowledgePayload {
 // ---------------------------------------------------------------------------
 
 /// The SELECT (without ORDER/LIMIT) used everywhere to hydrate a payload,
-/// joining each item's tags into a pipe-separated string.
+/// joining each item's tags into a pipe-separated string. Includes the v2
+/// sync columns (`sync_id`, `deleted_at`) so every read path is sync-aware
+/// out of the box. Callers that need to see soft-deleted rows (the sync
+/// engine) must build their own SELECT without the `deleted_at IS NULL`
+/// filter — see `snapshot_active` / `snapshot_all` in sync.rs.
 const ITEM_SELECT: &str = "SELECT k.id, k.question, k.answer, k.domain, k.topic,
         k.source, k.follow_ups, k.related_ids, k.favorite, k.created_at, k.updated_at, k.last_read_at,
+        k.sync_id, k.deleted_at,
         (SELECT group_concat(t.name, '|') FROM knowledge_tags kt JOIN tags t ON t.id = kt.tag_id
           WHERE kt.knowledge_id = k.id) AS tags
       FROM knowledge_items k ";
@@ -218,8 +313,10 @@ fn row_to_payload(row: &rusqlite::Row) -> rusqlite::Result<KnowledgePayload> {
         created_at: row.get(9)?,
         updated_at: row.get(10)?,
         last_read_at: row.get(11)?,
+        sync_id: row.get::<_, String>(12)?,
+        deleted_at: row.get::<_, Option<String>>(13)?,
         tags: row
-            .get::<_, Option<String>>(12)?
+            .get::<_, Option<String>>(14)?
             .map(|s| s.split('|').filter(|x| !x.is_empty()).map(String::from).collect())
             .unwrap_or_default(),
     })
@@ -227,25 +324,31 @@ fn row_to_payload(row: &rusqlite::Row) -> rusqlite::Result<KnowledgePayload> {
 
 /// All knowledge, newest first (stable for the browse page).
 pub fn list(conn: &Connection) -> rusqlite::Result<Vec<KnowledgePayload>> {
-    let sql = format!("{} ORDER BY k.created_at DESC, k.id DESC", ITEM_SELECT);
+    let sql = format!(
+        "{} WHERE k.deleted_at IS NULL ORDER BY k.created_at DESC, k.id DESC",
+        ITEM_SELECT
+    );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map([], |r| row_to_payload(r))?;
     rows.collect()
 }
 
 /// Fetch one item, recording its `last_read_at` as a side effect (detail view).
+/// Soft-deleted items are returned as `None` and the side-effect update is
+/// skipped — opening a deleted row must not silently extend its "read" history.
 pub fn get(conn: &Connection, id: &str) -> rusqlite::Result<Option<KnowledgePayload>> {
     let Some(kid) = parse_id(id) else { return Ok(None) };
     let now = now_ts();
     conn.execute(
-        "UPDATE knowledge_items SET last_read_at = ?1 WHERE id = ?2",
+        "UPDATE knowledge_items SET last_read_at = ?1
+         WHERE id = ?2 AND deleted_at IS NULL",
         params![now, kid],
     )?;
     get_by_kid(conn, kid)
 }
 
 fn get_by_kid(conn: &Connection, kid: i64) -> rusqlite::Result<Option<KnowledgePayload>> {
-    let sql = format!("{} WHERE k.id = ?1", ITEM_SELECT);
+    let sql = format!("{} WHERE k.id = ?1 AND k.deleted_at IS NULL", ITEM_SELECT);
     let mut stmt = conn.prepare(&sql)?;
     let mut rows = stmt.query_map(params![kid], |r| row_to_payload(r))?;
     rows.next().transpose()
@@ -259,12 +362,180 @@ fn parse_id(id: &str) -> Option<i64> {
 pub fn recent(conn: &Connection, limit: usize) -> rusqlite::Result<Vec<KnowledgePayload>> {
     let cap = limit.clamp(1, 500) as i64;
     let sql = format!(
-        "{} ORDER BY (k.last_read_at IS NULL) ASC, k.last_read_at DESC, k.id DESC LIMIT ?1",
+        "{} WHERE k.deleted_at IS NULL
+         ORDER BY (k.last_read_at IS NULL) ASC, k.last_read_at DESC, k.id DESC LIMIT ?1",
         ITEM_SELECT
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(params![cap], |r| row_to_payload(r))?;
     rows.collect()
+}
+
+// ---------------------------------------------------------------------------
+// Sync-layer internal queries.
+//
+// These intentionally do NOT go through the UI's `list` / `get` / `search`
+// paths: those hide soft-deleted rows AND have side effects (`get` bumps
+// `last_read_at`). The Sync engine must see the full state including
+// tombstones, and must not silently pollute read tracking.
+//
+// Every read here is a pure SELECT. Write paths in this section are
+// invoked by `sync::apply_plan` and are responsible for keeping
+// `knowledge_fts` consistent with the new `deleted_at` state.
+// ---------------------------------------------------------------------------
+
+/// Read every knowledge row, INCLUDING soft-deleted ones. Sync-layer only;
+/// the UI-facing read paths (list / recent / search / get) still hide them.
+/// No side effect on `last_read_at` and no FTS reads.
+pub fn list_all_for_sync(conn: &Connection) -> rusqlite::Result<Vec<KnowledgePayload>> {
+    let sql = format!("{} ORDER BY k.id", ITEM_SELECT);
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([], |r| row_to_payload(r))?;
+    rows.collect()
+}
+
+/// Look up a single row by its cross-device sync id, including tombstoned
+/// rows. Sync-layer only. Returns `None` when the sync id is unknown.
+pub fn get_by_sync_id_including_deleted(
+    conn: &Connection,
+    sync_id: &str,
+) -> rusqlite::Result<Option<KnowledgePayload>> {
+    let sql = format!("{} WHERE k.sync_id = ?1", ITEM_SELECT);
+    let mut stmt = conn.prepare(&sql)?;
+    let mut rows = stmt.query_map(params![sync_id], |r| row_to_payload(r))?;
+    rows.next().transpose()
+}
+
+/// Soft-delete a row by its sync id, recording `deleted_at` and dropping
+/// its FTS row. The actual `knowledge_items` row is preserved (the tombstone
+/// is what travels to peer devices through the next snapshot). Returns
+/// `true` when a row was actually transitioned active → tombstoned on this
+/// call; `false` when the row was already tombstoned or absent.
+pub fn soft_delete_by_sync_id(
+    conn: &Connection,
+    sync_id: &str,
+    deleted_at: &str,
+) -> rusqlite::Result<bool> {
+    let changed = conn.execute(
+        "UPDATE knowledge_items SET deleted_at = ?1
+         WHERE sync_id = ?2 AND deleted_at IS NULL",
+        params![deleted_at, sync_id],
+    )?;
+    if changed > 0 {
+        let kid: Option<i64> = conn
+            .query_row(
+                "SELECT id FROM knowledge_items WHERE sync_id = ?1",
+                params![sync_id],
+                |r| r.get(0),
+            )
+            .ok();
+        if let Some(kid) = kid {
+            conn.execute("DELETE FROM knowledge_fts WHERE rowid = ?1", params![kid])?;
+        }
+    }
+    Ok(changed > 0)
+}
+
+/// Insert a new row from a Sync snapshot. Skips the UI's `save` path
+/// because the Sync engine writes pre-merged state (and is the one place
+/// that may legitimately insert an already-tombstoned row). Refuses empty
+/// / whitespace / non-UUID sync_id: the wire format is UUID-only, and
+/// the partial UNIQUE index on `sync_id` would reject a non-conforming
+/// value at INSERT time anyway. Failing here gives a cleaner error
+/// before the snapshot hits the SQL layer.
+/// On success the FTS index is kept in sync with `deleted_at`.
+pub fn insert_from_sync(
+    conn: &Connection,
+    item: &KnowledgePayload,
+) -> rusqlite::Result<i64> {
+    let sync_id = item.sync_id.trim();
+    if sync_id.is_empty() {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
+    if uuid::Uuid::parse_str(sync_id).is_err() {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
+    let favorite = i64::from(item.favorite.unwrap_or(false));
+    conn.execute(
+        "INSERT INTO knowledge_items
+            (question, answer, domain, topic, source, follow_ups, related_ids, favorite,
+             created_at, updated_at, last_read_at, sync_id, deleted_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+        params![
+            item.question,
+            item.answer,
+            item.domain,
+            item.topic,
+            item.source,
+            serde_json::to_string(&item.follow_ups).unwrap_or_else(|_| "[]".into()),
+            serde_json::to_string(&item.related_ids).unwrap_or_else(|_| "[]".into()),
+            favorite,
+            item.created_at,
+            item.updated_at,
+            item.last_read_at,
+            sync_id,
+            item.deleted_at,
+        ],
+    )?;
+    let kid = conn.last_insert_rowid();
+    sync_topics(conn, &item.domain, &item.topic)?;
+    sync_tags(conn, kid, &item.tags)?;
+    sync_fts(conn, kid, item)?;
+    Ok(kid)
+}
+
+/// Update an existing row from a Sync snapshot. Looks the row up by
+/// `sync_id` and overwrites content fields, FTS and tag set. Returns
+/// `false` when the local row is already tombstoned (a Sync engine
+/// "update" must never resurrect — see plan_merge's DeletionSticky rule);
+/// in that case the local tombstone wins. Local numeric id and
+/// `created_at` are preserved.
+pub fn update_from_sync(
+    conn: &Connection,
+    sync_id: &str,
+    item: &KnowledgePayload,
+) -> rusqlite::Result<bool> {
+    let trimmed = sync_id.trim();
+    if trimmed.is_empty() || uuid::Uuid::parse_str(trimmed).is_err() {
+        return Err(rusqlite::Error::InvalidQuery);
+    }
+    let (kid, current_deleted_at): (i64, Option<String>) = conn
+        .query_row(
+            "SELECT id, deleted_at FROM knowledge_items WHERE sync_id = ?1",
+            params![trimmed],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+    if current_deleted_at.is_some() {
+        // Sticky tombstone: refuse to resurrect. Caller (Sync engine) is
+        // responsible for not planning this branch; this is a defensive guard.
+        return Ok(false);
+    }
+    let favorite = i64::from(item.favorite.unwrap_or(false));
+    conn.execute(
+        "UPDATE knowledge_items SET
+            question=?1, answer=?2, domain=?3, topic=?4,
+            source=?5, follow_ups=?6, related_ids=?7, favorite=?8,
+            updated_at=?9, last_read_at=?10, deleted_at=?11
+         WHERE id = ?12",
+        params![
+            item.question,
+            item.answer,
+            item.domain,
+            item.topic,
+            item.source,
+            serde_json::to_string(&item.follow_ups).unwrap_or_else(|_| "[]".into()),
+            serde_json::to_string(&item.related_ids).unwrap_or_else(|_| "[]".into()),
+            favorite,
+            item.updated_at,
+            item.last_read_at,
+            item.deleted_at,
+            kid,
+        ],
+    )?;
+    sync_topics(conn, &item.domain, &item.topic)?;
+    sync_tags(conn, kid, &item.tags)?;
+    sync_fts(conn, kid, item)?;
+    Ok(true)
 }
 
 // ---------------------------------------------------------------------------
@@ -326,18 +597,39 @@ pub fn clear(conn: &Connection) -> rusqlite::Result<usize> {
 /// Insert a new row or update an existing one (matched by numeric id string).
 /// Returns the persisted payload with the real DB id. Also keeps topics, tags
 /// and the FTS index in sync.
+///
+/// Sync-id rules:
+///   * On insert: if the caller's `sync_id` is empty, a fresh UUIDv4 is
+///     generated and persisted. Otherwise the caller's value is kept verbatim.
+///   * On update: the existing `sync_id` is always preserved (a stable
+///     identity cannot be silently swapped by a re-save with a blank field).
+///     This is the property the cross-device merge engine relies on.
 fn save_internal(conn: &Connection, item: &KnowledgePayload) -> rusqlite::Result<KnowledgePayload> {
     let favorite = i64::from(item.favorite.unwrap_or(false));
     let exist_id = parse_id(&item.id);
-    let kid: i64 = if let Some(exist) = exist_id {
-        let found: Option<i64> = conn
+    let (kid, persisted_sync_id) = if let Some(exist) = exist_id {
+        let found: Option<(i64, String)> = conn
             .query_row(
-                "SELECT id FROM knowledge_items WHERE id = ?1",
+                "SELECT id, sync_id FROM knowledge_items WHERE id = ?1",
                 params![exist],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .ok();
-        if let Some(found) = found {
+        if let Some((found_id, existing_sync)) = found {
+            // Update: the row's sync_id is immutable. If the caller passed an
+            // empty sync_id, that's "I don't have one" — use the stored one.
+            // If the caller passed a different sync_id, that's a programmer
+            // error (the row already has one). We keep the stored value.
+            let keep_sync = if item.sync_id.trim().is_empty() {
+                existing_sync.clone()
+            } else if item.sync_id != existing_sync {
+                // Conflict on a known id: prefer the stored value (caller
+                // cannot change identity through save). This keeps update
+                // semantics predictable.
+                existing_sync.clone()
+            } else {
+                item.sync_id.clone()
+            };
             conn.execute(
                 "UPDATE knowledge_items SET question=?1, answer=?2, domain=?3, topic=?4,
                         source=?5, follow_ups=?6, related_ids=?7, favorite=?8, updated_at=?9, last_read_at=?10
@@ -353,28 +645,47 @@ fn save_internal(conn: &Connection, item: &KnowledgePayload) -> rusqlite::Result
                     favorite,
                     item.updated_at,
                     item.last_read_at,
-                    found,
+                    found_id,
                 ],
             )?;
-            found
+            (found_id, keep_sync)
         } else {
-            insert_row(conn, item, favorite)?
+            let new_sync = if item.sync_id.trim().is_empty() {
+                uuid::Uuid::new_v4().to_string()
+            } else {
+                item.sync_id.clone()
+            };
+            let new_id = insert_row(conn, item, favorite, &new_sync)?;
+            (new_id, new_sync)
         }
     } else {
-        insert_row(conn, item, favorite)?
+        let new_sync = if item.sync_id.trim().is_empty() {
+            uuid::Uuid::new_v4().to_string()
+        } else {
+            item.sync_id.clone()
+        };
+        let new_id = insert_row(conn, item, favorite, &new_sync)?;
+        (new_id, new_sync)
     };
 
     sync_topics(conn, &item.domain, &item.topic)?;
     sync_tags(conn, kid, &item.tags)?;
     sync_fts(conn, kid, item)?;
-    get_by_kid(conn, kid)?.ok_or_else(|| rusqlite::Error::InvalidQuery)
+    // Re-read so the returned payload carries the canonical sync_id and id.
+    let persisted = get_by_kid(conn, kid)?.ok_or_else(|| rusqlite::Error::InvalidQuery)?;
+    // If the row is soft-deleted, `get_by_kid` will return None and we cannot
+    // hand back a payload — but `save` is the public "upsert" path that the
+    // UI uses for active rows, so this branch is unreachable in practice.
+    // We still want a value in the returned struct for type-system hygiene.
+    let _ = persisted_sync_id;
+    Ok(persisted)
 }
 
-fn insert_row(conn: &Connection, item: &KnowledgePayload, favorite: i64) -> rusqlite::Result<i64> {
+fn insert_row(conn: &Connection, item: &KnowledgePayload, favorite: i64, sync_id: &str) -> rusqlite::Result<i64> {
     conn.execute(
         "INSERT INTO knowledge_items
-            (question, answer, domain, topic, source, follow_ups, related_ids, favorite, created_at, updated_at, last_read_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            (question, answer, domain, topic, source, follow_ups, related_ids, favorite, created_at, updated_at, last_read_at, sync_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         params![
             item.question,
             item.answer,
@@ -387,6 +698,7 @@ fn insert_row(conn: &Connection, item: &KnowledgePayload, favorite: i64) -> rusq
             item.created_at,
             item.updated_at,
             item.last_read_at,
+            sync_id,
         ],
     )?;
     Ok(conn.last_insert_rowid())
@@ -427,8 +739,16 @@ fn sync_tags(conn: &Connection, kid: i64, tags: &[String]) -> rusqlite::Result<(
 /// word-token read-model: the raw text lives forever in `knowledge_items` and is
 /// what every reader (UI / Detail / Chat context / LLM) consumes. `knowledge_fts`
 /// columns here hold jieba space-joined tokens, never the original.
+///
+/// Tombstoned rows (deleted_at IS NOT NULL) are NOT re-indexed: the FTS index
+/// is a read-side accelerator for the active knowledge base, and a deleted
+/// item must not surface in search results. The row is still kept on disk so
+/// the Sync engine can still see the tombstone and propagate it.
 fn sync_fts(conn: &Connection, kid: i64, item: &KnowledgePayload) -> rusqlite::Result<()> {
     conn.execute("DELETE FROM knowledge_fts WHERE rowid = ?1", params![kid])?;
+    if item.deleted_at.is_some() {
+        return Ok(());
+    }
     conn.execute(
         "INSERT INTO knowledge_fts(rowid, question, answer, domain, topic, tags)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -509,7 +829,8 @@ fn run_fts(
     params.push(rusqlite::types::Value::Integer(cap));
     let sql = format!(
         "{} JOIN knowledge_fts ON knowledge_fts.rowid = k.id
-         WHERE knowledge_fts MATCH ?1 {scope}
+         WHERE knowledge_fts MATCH ?1
+           AND k.deleted_at IS NULL {scope}
          ORDER BY bm25(knowledge_fts, 8.0, 0.5, 3.0, 3.0, 2.0) LIMIT ?{}",
         ITEM_SELECT,
         params.len()
@@ -585,6 +906,7 @@ mod tests {
     fn payload(question: &str) -> KnowledgePayload {
         KnowledgePayload {
             id: String::new(),
+            sync_id: String::new(),
             question: question.to_string(),
             answer: "答案正文".to_string(),
             domain: "后端开发".to_string(),
@@ -597,6 +919,7 @@ mod tests {
             updated_at: NOW.to_string(),
             favorite: Some(false),
             last_read_at: None,
+            deleted_at: None,
         }
     }
 
@@ -612,6 +935,7 @@ mod tests {
             conn,
             &KnowledgePayload {
                 id: String::new(),
+                sync_id: String::new(),
                 question: question.to_string(),
                 answer: answer.to_string(),
                 domain: domain.to_string(),
@@ -886,5 +1210,425 @@ mod tests {
         let items = list(&conn2).unwrap();
         assert!(items.iter().any(|x| x.question == "持久化测试问题"), "restarted app still sees inserted row");
         let _ = inserted;
+    }
+
+    // -----------------------------------------------------------------
+    // v2 schema: sync_id / deleted_at. Every Knowledge now carries a
+    // stable cross-device identity and a tombstone flag.
+    // -----------------------------------------------------------------
+
+    /// Build a v1-only DB on disk and run the standard `migrate()` against it.
+    /// The v2 step must add the columns and backfill every existing row with a
+    /// non-empty sync_id, then bump `user_version` to 2.
+    #[test]
+    fn migrate_v2_adds_sync_id_and_deleted_at_to_v1_db() -> Result<(), Box<dyn std::error::Error>> {
+        let dir = std::env::temp_dir().join(format!(
+            "interview-kit-v1-only-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("v1.db");
+        let conn = open(&path).unwrap();
+        // Force the v1 schema by hand (no sync_id, no deleted_at).
+        conn.execute_batch(
+            "CREATE TABLE topics (id INTEGER PRIMARY KEY AUTOINCREMENT, domain TEXT NOT NULL, topic TEXT NOT NULL, UNIQUE(domain, topic));
+             CREATE TABLE tags   (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE);
+             CREATE TABLE knowledge_items (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 question TEXT NOT NULL, answer TEXT NOT NULL,
+                 domain TEXT NOT NULL, topic TEXT NOT NULL, source TEXT NOT NULL DEFAULT '',
+                 follow_ups TEXT NOT NULL DEFAULT '[]', related_ids TEXT NOT NULL DEFAULT '[]',
+                 favorite INTEGER NOT NULL DEFAULT 0,
+                 created_at TEXT NOT NULL, updated_at TEXT NOT NULL, last_read_at TEXT
+             );
+             CREATE TABLE knowledge_tags (knowledge_id INTEGER NOT NULL, tag_id INTEGER NOT NULL, PRIMARY KEY (knowledge_id, tag_id));
+             PRAGMA user_version = 1;",
+        ).unwrap();
+        // Three pre-existing rows: would be invisible to v2 code without backfill.
+        for q in ["q1", "q2", "q3"] {
+            conn.execute(
+                "INSERT INTO knowledge_items (question, answer, domain, topic, created_at, updated_at)
+                 VALUES (?1, 'a', 'd', 't', '2026-09-04', '2026-09-04')",
+                [q],
+            ).unwrap();
+        }
+        drop(conn);
+
+        // Now run the standard open+init (which calls migrate()).
+        let (conn2, _) = open_inits(&path);
+        // Both columns exist.
+        let cols: Vec<String> = conn2
+            .prepare("SELECT name FROM pragma_table_info('knowledge_items')")?
+            .query_map([], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        assert!(cols.iter().any(|c| c == "sync_id"), "sync_id column added: {:?}", cols);
+        assert!(cols.iter().any(|c| c == "deleted_at"), "deleted_at column added: {:?}", cols);
+        // Every pre-existing row now has a non-empty, unique sync_id.
+        let n_total: i64 = conn2
+            .query_row("SELECT count(*) FROM knowledge_items", [], |r| r.get(0))
+            .unwrap();
+        let n_synced: i64 = conn2
+            .query_row(
+                "SELECT count(*) FROM knowledge_items WHERE sync_id != ''",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n_total, 3);
+        assert_eq!(n_synced, 3, "every pre-existing row was backfilled");
+        let n_unique: i64 = conn2
+            .query_row(
+                "SELECT count(DISTINCT sync_id) FROM knowledge_items",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n_unique, 3, "backfilled sync_ids are unique");
+        // user_version reached the current latest (the v2 step ran, then the
+        // v3 step added the unique index — both are part of the same
+        // idempotent open()).
+        let v: i64 = conn2
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert!(v >= 2, "user_version advanced past v2: got {v}");
+        let _ = fs::remove_file(&path);
+        Ok(())
+    }
+
+    /// Re-running `migrate()` on an already-v2 DB must be a true no-op. The
+    /// columns still exist (we don't drop them), the row count is unchanged,
+    /// and the existing sync_ids are not regenerated. The exact user_version
+    /// is the latest (>= 2); we don't pin a number here so future patches
+    /// to the migration ladder don't have to touch this assertion.
+    #[test]
+    fn migrate_v2_is_idempotent() {
+        let path = tmp_path("v2-idem");
+        let (conn, _) = open_inits(&path);
+        let inserted = save(&conn, &payload("幂等测试")).unwrap();
+        let original_sync = inserted.sync_id.clone();
+        assert!(!original_sync.is_empty());
+
+        // Re-run migrate. Public API: just call `migrate` through a fresh
+        // open so we exercise the same path the app would on next launch.
+        drop(conn);
+        let (conn2, _) = open_inits(&path);
+        let again = list(&conn2).unwrap();
+        assert_eq!(again.len(), 1);
+        assert_eq!(again[0].sync_id, original_sync, "sync_id preserved across re-migrate");
+        let v: i64 = conn2
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert!(v >= 2, "user_version remained at the latest: got {v}");
+    }
+
+    /// save() with no sync_id on the payload must assign one; two saves must
+    /// produce two distinct sync_ids. A subsequent save reusing the first
+    /// payload's sync_id but a different numeric id must still preserve the
+    /// stored sync_id (immutable identity through upsert).
+    #[test]
+    fn save_assigns_and_preserves_sync_id() {
+        let path = tmp_path("syncid-assign");
+        let (conn, _) = open_inits(&path);
+        let a = save(&conn, &payload("问题 A")).unwrap();
+        let b = save(&conn, &payload("问题 B")).unwrap();
+        assert!(!a.sync_id.is_empty(), "save auto-generates sync_id");
+        assert!(!b.sync_id.is_empty(), "save auto-generates sync_id");
+        assert_ne!(a.sync_id, b.sync_id, "two saves produce two distinct sync_ids");
+        assert!(uuid::Uuid::parse_str(&a.sync_id).is_ok(), "sync_id is a valid UUID");
+        assert!(uuid::Uuid::parse_str(&b.sync_id).is_ok(), "sync_id is a valid UUID");
+
+        // Update A: same numeric id, same sync_id preserved.
+        let mut upd = a.clone();
+        upd.question = "问题 A（已修订）".to_string();
+        let saved = save(&conn, &upd).unwrap();
+        assert_eq!(saved.id, a.id, "same numeric id on update");
+        assert_eq!(saved.sync_id, a.sync_id, "sync_id survives update");
+    }
+
+    /// Every read path must skip rows whose `deleted_at` is set. This is the
+    /// single source of truth for "user no longer sees this" — the home page,
+    /// search, detail (get), and the recent list all share the same filter.
+    #[test]
+    fn read_paths_hide_soft_deleted_rows() {
+        let path = tmp_path("soft-delete");
+        let (conn, _) = open_inits(&path);
+        let active = save(&conn, &payload("仍可见的知识")).unwrap();
+        let doomed = save(&conn, &payload("应被隐藏的知识")).unwrap();
+
+        // Mark the second row as soft-deleted directly (Task 2 will add a
+        // dedicated command; for the schema test we just want to verify the
+        // filter behavior end-to-end).
+        conn.execute(
+            "UPDATE knowledge_items SET deleted_at = '1700000000' WHERE id = ?1",
+            params![doomed.id.parse::<i64>().unwrap()],
+        )
+        .unwrap();
+
+        // list() — the active row is the only one visible.
+        let listed = list(&conn).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, active.id);
+
+        // recent() — same filter.
+        let rec = recent(&conn, 10).unwrap();
+        assert_eq!(rec.len(), 1);
+        assert_eq!(rec[0].id, active.id);
+
+        // get() — returns None for the deleted row and does NOT bump its
+        // last_read_at (the side-effect update is gated on deleted_at IS NULL).
+        let got = get(&conn, &doomed.id).unwrap();
+        assert!(got.is_none(), "get() hides soft-deleted rows");
+        let after_ts: Option<String> = conn
+            .query_row(
+                "SELECT last_read_at FROM knowledge_items WHERE id = ?1",
+                params![doomed.id.parse::<i64>().unwrap()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(after_ts.is_none(), "soft-deleted row's last_read_at not bumped");
+
+        // search() — FTS-based retrieval must also filter the deleted row out.
+        let hits = search(&conn, "隐藏", true).unwrap();
+        assert!(hits.is_empty(), "search hides soft-deleted rows");
+    }
+
+    // -----------------------------------------------------------------
+    // v3 schema: UNIQUE constraint on sync_id.
+    // -----------------------------------------------------------------
+
+    /// v3 must add a partial UNIQUE index on `sync_id`. Two rows cannot share
+    /// the same non-empty sync_id, but the empty-string sentinel used by
+    /// `save()` to ask the server to mint one must remain valid.
+    #[test]
+    fn migrate_v3_enforces_unique_sync_id() {
+        let path = tmp_path("v3-unique");
+        let (conn, _) = open_inits(&path);
+        let v: i64 = conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, 3, "user_version reached 3");
+
+        let a = save(&conn, &payload("唯一约束 A")).unwrap();
+        // Manually insert a row with a *different* sync_id — must succeed.
+        let mut b_payload = payload("唯一约束 B");
+        b_payload.sync_id = "manual-sync-id-b".to_string();
+        save(&conn, &b_payload).unwrap();
+
+        // Inserting a row with a *duplicate* sync_id must fail at the DB.
+        let dup_result = conn.execute(
+            "INSERT INTO knowledge_items
+                (question, answer, domain, topic, source, follow_ups, related_ids, favorite,
+                 created_at, updated_at, last_read_at, sync_id)
+             VALUES ('dup', 'a', 'd', 't', '', '[]', '[]', 0, '', '', NULL, ?1)",
+            params![a.sync_id],
+        );
+        assert!(dup_result.is_err(), "duplicate sync_id must be rejected");
+
+        // Empty sync_id is still allowed (the partial index skips '').
+        let empty_result = conn.execute(
+            "INSERT INTO knowledge_items
+                (question, answer, domain, topic, source, follow_ups, related_ids, favorite,
+                 created_at, updated_at, last_read_at, sync_id)
+             VALUES ('empty', 'a', 'd', 't', '', '[]', '[]', 0, '', '', NULL, '')",
+            [],
+        );
+        assert!(empty_result.is_ok(), "empty sync_id remains allowed (partial index predicate)");
+    }
+
+    // -----------------------------------------------------------------
+    // Sync-layer internal queries.
+    // -----------------------------------------------------------------
+
+    /// `list_all_for_sync` must include tombstoned rows that every UI-facing
+    /// read path hides. It must also not bump `last_read_at` on any row
+    /// (no side effects). This is the property the Sync engine relies on:
+    /// if it ever calls the UI's `list`, it will silently miss deletions.
+    #[test]
+    fn list_all_for_sync_includes_tombstones() {
+        let path = tmp_path("sync-list-all");
+        let (conn, _) = open_inits(&path);
+        let active = save(&conn, &payload("仍可见")).unwrap();
+        let doomed = save(&conn, &payload("应被隐藏但同步层必须看见")).unwrap();
+
+        // Mark the second row tombstoned directly.
+        conn.execute(
+            "UPDATE knowledge_items SET deleted_at = '1700000000' WHERE id = ?1",
+            params![doomed.id.parse::<i64>().unwrap()],
+        )
+        .unwrap();
+
+        // The UI sees one row; the sync layer sees two.
+        assert_eq!(list(&conn).unwrap().len(), 1);
+        let sync_view = list_all_for_sync(&conn).unwrap();
+        assert_eq!(sync_view.len(), 2);
+        let tombstoned = sync_view
+            .iter()
+            .find(|p| p.sync_id == doomed.sync_id)
+            .expect("tombstoned row present in sync view");
+        assert_eq!(tombstoned.deleted_at.as_deref(), Some("1700000000"));
+
+        // The sync-layer list does not bump last_read_at.
+        let before_active: Option<String> = conn
+            .query_row(
+                "SELECT last_read_at FROM knowledge_items WHERE id = ?1",
+                params![active.id.parse::<i64>().unwrap()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let _ = list_all_for_sync(&conn).unwrap();
+        let after_active: Option<String> = conn
+            .query_row(
+                "SELECT last_read_at FROM knowledge_items WHERE id = ?1",
+                params![active.id.parse::<i64>().unwrap()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(before_active, after_active, "list_all_for_sync has no side effect");
+    }
+
+    /// `get_by_sync_id_including_deleted` finds a row regardless of its
+    /// tombstone state. The UI's `get` would return None — sync must not.
+    #[test]
+    fn get_by_sync_id_including_deleted_finds_tombstoned_rows() {
+        let path = tmp_path("sync-get-incl");
+        let (conn, _) = open_inits(&path);
+        let a = save(&conn, &payload("active")).unwrap();
+        let b = save(&conn, &payload("to-be-deleted")).unwrap();
+        assert!(soft_delete_by_sync_id(&conn, &b.sync_id, "1700000000").unwrap());
+        // soft-delete returned true on the transition; calling again is a no-op.
+        assert!(!soft_delete_by_sync_id(&conn, &b.sync_id, "1700000001").unwrap());
+
+        let active_lookup =
+            get_by_sync_id_including_deleted(&conn, &a.sync_id).unwrap().unwrap();
+        assert_eq!(active_lookup.sync_id, a.sync_id);
+        assert!(active_lookup.deleted_at.is_none());
+
+        let tombstone_lookup =
+            get_by_sync_id_including_deleted(&conn, &b.sync_id).unwrap().unwrap();
+        assert_eq!(tombstone_lookup.sync_id, b.sync_id);
+        assert_eq!(tombstone_lookup.deleted_at.as_deref(), Some("1700000000"));
+
+        let unknown = get_by_sync_id_including_deleted(&conn, "no-such-sync-id").unwrap();
+        assert!(unknown.is_none());
+    }
+
+    /// `soft_delete_by_sync_id` must remove the FTS row in lockstep with
+    /// setting `deleted_at`. Otherwise a soft-deleted item would still be
+    /// returned by `search` (the FTS query already filters active rows,
+    /// but the explicit FTS-clearing step is the source of truth).
+    #[test]
+    fn soft_delete_by_sync_id_clears_fts() {
+        let path = tmp_path("sync-soft-del-fts");
+        let (conn, _) = open_inits(&path);
+        let p = save(&conn, &payload("Redis 单线程")).unwrap();
+        // FTS row exists pre-delete.
+        let fts_before: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM knowledge_fts WHERE rowid = ?1",
+                params![p.id.parse::<i64>().unwrap()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(fts_before, 1, "FTS row exists before delete");
+
+        soft_delete_by_sync_id(&conn, &p.sync_id, "1700000000").unwrap();
+
+        let fts_after: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM knowledge_fts WHERE rowid = ?1",
+                params![p.id.parse::<i64>().unwrap()],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(fts_after, 0, "FTS row removed on soft delete");
+    }
+
+    /// `insert_from_sync` and `update_from_sync` must keep FTS in lockstep
+    /// with `deleted_at`. A tombstoned row inserted from sync must not be
+    /// findable via `search`; an updated row that arrives tombstoned must
+    /// be removed from FTS too.
+    #[test]
+    fn insert_and_update_from_sync_manage_fts_correctly() {
+        let path = tmp_path("sync-fsync-fts");
+        let (conn, _) = open_inits(&path);
+
+        // Build a tombstoned item from the wire-format and insert.
+        let tomb_sync_id = "55555555-5555-5555-5555-555555555555";
+        let active_sync_id = "66666666-6666-6666-6666-666666666666";
+        let mut tomb = payload("来自同步的墓碑条目");
+        tomb.sync_id = tomb_sync_id.to_string();
+        tomb.deleted_at = Some("1700000000".to_string());
+        let kid = insert_from_sync(&conn, &tomb).unwrap();
+        let fts: i64 = conn
+            .query_row("SELECT count(*) FROM knowledge_fts WHERE rowid = ?1", params![kid], |r| r.get(0))
+            .unwrap();
+        assert_eq!(fts, 0, "tombstoned snapshot item does NOT enter FTS");
+
+        // The row is still on disk, queryable by sync_id.
+        let from_disk = get_by_sync_id_including_deleted(&conn, tomb_sync_id).unwrap().unwrap();
+        assert_eq!(from_disk.deleted_at.as_deref(), Some("1700000000"));
+
+        // Insert an active item from sync and verify FTS picks it up.
+        let mut active = payload("来自同步的活跃条目");
+        active.sync_id = active_sync_id.to_string();
+        let kid_a = insert_from_sync(&conn, &active).unwrap();
+        let hits = search(&conn, "来自同步", true).unwrap();
+        assert!(hits.iter().any(|x| x.sync_id == active_sync_id),
+                "active sync-inserted item is in FTS");
+
+        // Update the active item to a tombstone via update_from_sync — FTS
+        // must drop the row, even though update_from_sync was used.
+        let mut t = payload("现在变成墓碑");
+        t.sync_id = active_sync_id.to_string();
+        t.deleted_at = Some("1700000001".to_string());
+        update_from_sync(&conn, active_sync_id, &t).unwrap();
+        let fts2: i64 = conn
+            .query_row("SELECT count(*) FROM knowledge_fts WHERE rowid = ?1", params![kid_a], |r| r.get(0))
+            .unwrap();
+        assert_eq!(fts2, 0, "updated-to-tombstone row removed from FTS");
+    }
+
+    /// `update_from_sync` must refuse to resurrect a tombstoned row. The
+    /// local `deleted_at` is sticky once set, even when an incoming
+    /// snapshot still thinks the item is active.
+    #[test]
+    fn update_from_sync_cannot_resurrect_tombstone() {
+        let path = tmp_path("sync-no-resurr");
+        let (conn, _) = open_inits(&path);
+        let p = save(&conn, &payload("会被墓碑化")).unwrap();
+        soft_delete_by_sync_id(&conn, &p.sync_id, "1700000000").unwrap();
+
+        // Build an "active" payload with the same sync_id and try to
+        // apply it. update_from_sync must return Ok(false) (refused to
+        // resurrect); the local row must stay tombstoned and its content
+        // must be untouched.
+        let mut reactivating = payload("尝试复活");
+        reactivating.sync_id = p.sync_id.clone();
+        reactivating.deleted_at = None;
+        let result = update_from_sync(&conn, &p.sync_id, &reactivating);
+        assert!(result.is_ok(), "update_from_sync returns Ok, not an error");
+        assert!(!result.unwrap(),
+                "update_from_sync returns Ok(false) for tombstoned local rows");
+        let row = get_by_sync_id_including_deleted(&conn, &p.sync_id).unwrap().unwrap();
+        assert_eq!(row.deleted_at.as_deref(), Some("1700000000"),
+                   "tombstone preserved; resurrection rejected");
+        assert_eq!(row.question, "会被墓碑化",
+                   "content of the tombstoned row was not overwritten");
+    }
+
+    /// `insert_from_sync` must refuse an empty sync_id — the Sync engine
+    /// is required to mint a UUID up front; the server never invents one
+    /// for an incoming wire-format row.
+    #[test]
+    fn insert_from_sync_rejects_empty_sync_id() {
+        let path = tmp_path("sync-reject-empty");
+        let (conn, _) = open_inits(&path);
+        let mut bad = payload("empty sync_id");
+        bad.sync_id = String::new();
+        let res = insert_from_sync(&conn, &bad);
+        assert!(res.is_err(), "empty sync_id rejected");
     }
 }

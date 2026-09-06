@@ -1,6 +1,6 @@
 import { seedKnowledge } from '../data/mockData';
-import type { BackupInspect, BackupRestoreResult, BackupSummary, ChatMessage, ImportImage, Knowledge, Settings } from '../types';
-import type { BackupService, ChatService, ImportService, KnowledgeService, SettingsService } from './interfaces';
+import type { BackupInspect, BackupRestoreResult, BackupSummary, ChatMessage, ImportImage, Knowledge, Settings, SyncExportSummary, SyncImportSummary, SyncInspectReport, WebDavConfig, WebDavSyncSummary, WebDavTestResult } from '../types';
+import type { BackupService, ChatService, ImportService, KnowledgeService, SettingsService, SyncService, WebDavService } from './interfaces';
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 let knowledge = [...seedKnowledge];
 const makeDraft = (image: ImportImage, index: number): Knowledge => ({
@@ -58,5 +58,90 @@ export const backupService: BackupService = {
   async restore() {
     await wait(300);
     return { knowledgeCount: knowledge.length, domainCount: 0 };
+  },
+};
+
+// Mock Sync: same intent as Mock Backup — no real file IO under
+// `npm run dev`, but the surface matches the Tauri SyncService so the
+// UI can be developed end-to-end. All counts are zeros, no merge
+// actually happens; the production code goes through `syncService` in
+// `tauriServices.ts`.
+export const syncService: SyncService = {
+  async pickSavePath() { return null; },
+  async pickOpenPath() { return null; },
+  async export() {
+    await wait(300);
+    return {
+      path: '(mock) sync.iksync',
+      formatVersion: 1,
+      createdAt: new Date().toISOString(),
+      itemCount: knowledge.length,
+      activeCount: knowledge.length,
+      deletedCount: 0,
+    };
+  },
+  async inspect(): Promise<SyncInspectReport> {
+    await wait(200);
+    return {
+      path: '(mock) sync.iksync',
+      formatVersion: 1,
+      app: 'Interview Kit (Mock)',
+      createdAt: new Date().toISOString(),
+      sourceDevice: '',
+      itemCount: knowledge.length,
+      activeCount: knowledge.length,
+      deletedCount: 0,
+      bytesRead: 0,
+    };
+  },
+  async import(): Promise<SyncImportSummary> {
+    await wait(300);
+    return {
+      path: '(mock) sync.iksync',
+      formatVersion: 1,
+      snapshotCreatedAt: new Date().toISOString(),
+      snapshotItemCount: knowledge.length,
+      snapshotActiveCount: knowledge.length,
+      snapshotDeletedCount: 0,
+      bytesRead: 0,
+      stats: { inserted: 0, updated: 0, deleted: 0, skipped: knowledge.length, conflicts: 0 },
+    };
+  },
+};
+
+// Mock WebDAV: no real network under `npm run dev`, but the surface matches
+// the Tauri WebDavService so the Settings UI can be developed end-to-end.
+let webdavConfig: WebDavConfig = { url: '', username: '', password: '' };
+export const webdavService: WebDavService = {
+  async getConfig(): Promise<WebDavConfig> {
+    // Never echo the password back, mirroring the real backend.
+    return { ...webdavConfig, password: '' };
+  },
+  async saveConfig(config: WebDavConfig): Promise<void> {
+    // An empty password keeps the stored one (just like the Rust side).
+    webdavConfig = {
+      url: config.url,
+      username: config.username,
+      password: config.password || webdavConfig.password,
+    };
+    await wait(200);
+  },
+  async testConnection(): Promise<WebDavTestResult> {
+    await wait(800);
+    if (webdavConfig.url.trim().length === 0) {
+      return { success: false, latencyMs: 0, message: '尚未配置 WebDAV 地址。', errorKind: 'missingConfig' };
+    }
+    return { success: true, latencyMs: 120, message: '连接成功（Mock 模式，未发起真实请求）。', errorKind: '' };
+  },
+  async sync(): Promise<WebDavSyncSummary> {
+    await wait(900);
+    return {
+      remoteExisted: false,
+      downloadedItemCount: 0,
+      uploadedItemCount: knowledge.length,
+      stats: { inserted: 0, updated: 0, deleted: 0, skipped: knowledge.length, conflicts: 0 },
+      syncedAt: new Date().toISOString(),
+      retryCount: 0,
+    };
   },
 };

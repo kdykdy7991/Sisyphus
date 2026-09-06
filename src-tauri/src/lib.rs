@@ -7,9 +7,11 @@ mod similarity;
 mod chat;
 mod tokenizer;
 mod backup;
+mod sync;
+mod webdav;
 
 use tauri::Manager;
-use config::ApiConfigState;
+use config::{ApiConfigState, WebDavConfigState};
 use db::Db;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -32,6 +34,13 @@ pub fn run() {
                 inner: std::sync::Mutex::new(api_cfg),
                 db_path: path.clone(),
             });
+            // WebDAV lives in its own file so the transport credentials can
+            // never end up in a snapshot or a backup.
+            let webdav_cfg = config::load_webdav(&data_dir);
+            app.manage(WebDavConfigState {
+                data_dir: data_dir.clone(),
+                inner: std::sync::Mutex::new(webdav_cfg),
+            });
             eprintln!("[interview-kit] database ready at {} (trigram_fts={})", db_location, trigram);
             Ok(())
         })
@@ -51,6 +60,13 @@ pub fn run() {
             commands::backup_create,
             commands::backup_inspect,
             commands::backup_restore,
+            commands::sync_export_local,
+            commands::sync_inspect,
+            commands::sync_import_local,
+            commands::webdav_config_get,
+            commands::webdav_config_save,
+            commands::webdav_test_connection,
+            commands::sync_webdav,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Interview Kit");

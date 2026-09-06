@@ -2,11 +2,14 @@ use tauri::State;
 
 use crate::backup;
 use crate::chat;
-use crate::config::{self, ApiConfig, ApiConfigState};
+use crate::config::{ApiConfig, ApiConfigState};
+use crate::config::{self, WebDavConfig, WebDavConfigState};
 use crate::db::{self, Db, KnowledgePayload};
 use crate::llm::{LlmError, ModelMessage, OpenAiCompatClient};
 use crate::similarity;
+use crate::sync;
 use crate::vision;
+use crate::webdav;
 
 // Thin Tauri command layer: parse args, call db, convert errors to strings.
 // Keeps db.rs free of any Tauri dependency.
@@ -323,6 +326,118 @@ pub fn knowledge_recent(state: State<'_, Db>, limit: Option<usize>) -> Result<Ve
 pub fn knowledge_clear(state: State<'_, Db>) -> Result<usize, String> {
     let conn = state.conn.lock().unwrap();
     db::clear(&conn).map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Sync (local file transport)
+// ---------------------------------------------------------------------------
+
+/// Build a `.iksync` snapshot of the current local knowledge state and
+/// write it to `destination_path`. The write is atomic (stage at
+/// `<path>.tmp` then rename) so an interrupted export can never leave a
+/// half-written file at the canonical path.
+#[tauri::command]
+pub fn sync_export_local(
+    db: State<'_, Db>,
+    destination_path: String,
+) -> Result<sync::SyncExportSummary, String> {
+    let conn = db.conn.lock().unwrap();
+    let dest = std::path::PathBuf::from(&destination_path);
+    if let Some(parent) = dest.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+    }
+    sync::sync_export_local(&conn, &dest).map_err(|e| e.to_string())
+}
+
+/// Inspect a `.iksync` file without touching the database. Used by the
+/// UI to display a preview before the user confirms an import.
+#[tauri::command]
+pub fn sync_inspect(source_path: String) -> Result<sync::SyncInspectReport, String> {
+    let path = std::path::PathBuf::from(&source_path);
+    sync::sync_inspect(&path).map_err(|e| e.to_string())
+}
+
+/// Read a `.iksync` file, validate it, and merge it into the local
+/// database. The merge is all-or-nothing (see `sync::sync_import_local`).
+#[tauri::command]
+pub fn sync_import_local(
+    db: State<'_, Db>,
+    source_path: String,
+) -> Result<sync::SyncImportSummary, String> {
+    let mut guard = db.conn.lock().unwrap();
+    let path = std::path::PathBuf::from(&source_path);
+    sync::sync_import_local(&mut guard, &path).map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// Sync (WebDAV transport)
+//
+// WebDAV credentials are DEVICE configuration: they live in `webdav.json`
+// next to `config.json` and are never part of a snapshot, a backup or the
+// knowledge database. `webdav_config_get` therefore blanks the password —
+// the UI can only ever send it, never read it back.
+// ---------------------------------------------------------------------------
+
+/// Read the WebDAV configuration. The password is intentionally *not*
+/// included: the UI only needs to know a URL / username are configured, and
+/// an empty password on save means "keep the existing one".
+#[tauri::command]
+pub fn webdav_config_get(state: State<'_, WebDavConfigState>) -> WebDavConfig {
+    let mut cfg = state.inner.lock().unwrap().clone();
+    cfg.password = String::new();
+    cfg
+}
+
+/// Persist the WebDAV configuration. An empty `password` keeps the stored
+/// one (the UI never receives it back, so it can only submit an empty field).
+#[tauri::command]
+pub fn webdav_config_save(
+    state: State<'_, WebDavConfigState>,
+    config: WebDavConfig,
+) -> Result<(), String> {
+    let data_dir = state.data_dir.clone();
+    let mut guard = state.inner.lock().unwrap();
+    let merged = config::merge_webdav(&guard, config);
+    *guard = merged.clone();
+    drop(guard);
+    config::save_webdav(&data_dir, &merged).map_err(|e| e.to_string())
+}
+
+/// Verify the WebDAV endpoint without touching `latest.iksync`.
+///
+/// A plain `GET /` returning 200 is not enough, so this probes with OPTIONS
+/// and PROPFIND (Depth: 0) on the configured root and makes sure the
+/// `sync/` collection is usable, creating it when missing. The only remote
+/// write it can perform is that MKCOL — the snapshot file is never read or
+/// written here.
+#[tauri::command]
+pub async fn webdav_test_connection(
+    state: State<'_, WebDavConfigState>,
+) -> Result<webdav::WebDavTestResult, String> {
+    let cfg = state.inner.lock().unwrap().clone();
+    let client = webdav::ReqwestWebDavClient::new(&cfg).map_err(|e| e.to_string())?;
+    Ok(webdav::test_connection(&client).await)
+}
+
+/// Full WebDAV sync round-trip.
+///
+/// Downloads the remote snapshot, merges it with the local one using the
+/// shared Sync Engine, and uploads the merged result — so a Mac and a Pad
+/// that both added items converge instead of overwriting each other.
+/// A missing remote snapshot is a normal first sync, not an error. The
+/// database is never held across a network round-trip.
+#[tauri::command]
+pub async fn sync_webdav(
+    db: State<'_, Db>,
+    webdav_state: State<'_, WebDavConfigState>,
+) -> Result<sync::WebDavSyncSummary, String> {
+    let cfg = webdav_state.inner.lock().unwrap().clone();
+    let client = webdav::ReqwestWebDavClient::new(&cfg).map_err(|e| e.to_string())?;
+    sync::sync_via_webdav(&db.conn, &client)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 // ---------------------------------------------------------------------------

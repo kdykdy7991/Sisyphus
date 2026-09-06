@@ -1,7 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { save as saveDialog, open as openDialog } from '@tauri-apps/plugin-dialog';
-import type { BackupInspect, BackupRestoreResult, BackupSummary, ChatMessage, ChatResult, ImportImage, Knowledge, Settings, SimilaritySuggestion } from '../types';
-import type { BackupService, ChatService, ImportService, KnowledgeService, SettingsService } from './interfaces';
+import type { BackupInspect, BackupRestoreResult, BackupSummary, ChatMessage, ChatResult, ImportImage, Knowledge, Settings, SimilaritySuggestion, SyncExportSummary, SyncImportSummary, SyncInspectReport, WebDavConfig, WebDavSyncSummary, WebDavTestResult } from '../types';
+import type { BackupService, ChatService, ImportService, KnowledgeService, SettingsService, SyncService, WebDavService } from './interfaces';
 
 // Phase 2: the Knowledge store lives in SQLite behind Tauri commands.
 // Data flows React -> KnowledgeService -> invoke -> Rust command -> rusqlite.
@@ -173,5 +173,61 @@ export const backupService: BackupService = {
   },
   async restore(sourcePath: string): Promise<BackupRestoreResult> {
     return invoke<BackupRestoreResult>('backup_restore', { sourcePath });
+  },
+};
+
+// Sync (local file transport) — see `src-tauri/src/sync.rs`. The
+// `.iksync` file is a JSON snapshot of the current local knowledge
+// state (active rows + tombstones). Imports merge into the local DB;
+// re-importing the same file is a no-op (everything is Skip). The Rust
+// side handles parse / validate / plan / apply; the UI only routes
+// paths and surfaces the returned stats.
+export const syncService: SyncService = {
+  async pickSavePath(suggestedName: string): Promise<string | null> {
+    const result = await saveDialog({
+      title: '导出 Interview Kit 同步数据',
+      defaultPath: suggestedName,
+      filters: [{ name: 'Interview Kit Sync', extensions: ['iksync'] }],
+    });
+    return typeof result === 'string' ? result : null;
+  },
+  async pickOpenPath(): Promise<string | null> {
+    const result = await openDialog({
+      title: '选择 Interview Kit 同步数据',
+      multiple: false,
+      directory: false,
+      filters: [{ name: 'Interview Kit Sync', extensions: ['iksync'] }],
+    });
+    if (Array.isArray(result)) return result[0] ?? null;
+    return typeof result === 'string' ? result : null;
+  },
+  async export(destinationPath: string): Promise<SyncExportSummary> {
+    return invoke<SyncExportSummary>('sync_export_local', { destinationPath });
+  },
+  async inspect(sourcePath: string): Promise<SyncInspectReport> {
+    return invoke<SyncInspectReport>('sync_inspect', { sourcePath });
+  },
+  async import(sourcePath: string): Promise<SyncImportSummary> {
+    return invoke<SyncImportSummary>('sync_import_local', { sourcePath });
+  },
+};
+
+// Sync (WebDAV transport). The password is never returned by the backend
+// (`webdav_config_get` blanks it), so the UI only ever sends it; an empty
+// password on `saveConfig` means "keep the stored one". `testConnection`
+// probes the endpoint using the *saved* config, so the flow is
+// save-then-test to validate freshly typed values.
+export const webdavService: WebDavService = {
+  async getConfig(): Promise<WebDavConfig> {
+    return invoke<WebDavConfig>('webdav_config_get');
+  },
+  async saveConfig(config: WebDavConfig): Promise<void> {
+    await invoke('webdav_config_save', { config });
+  },
+  async testConnection(): Promise<WebDavTestResult> {
+    return invoke<WebDavTestResult>('webdav_test_connection');
+  },
+  async sync(): Promise<WebDavSyncSummary> {
+    return invoke<WebDavSyncSummary>('sync_webdav');
   },
 };

@@ -271,6 +271,7 @@ mod tests {
     fn payload(id: &str, question: &str) -> KnowledgePayload {
         KnowledgePayload {
             id: id.to_string(),
+            sync_id: String::new(),
             question: question.to_string(),
             answer: "答案".to_string(),
             domain: "后端开发".to_string(),
@@ -283,6 +284,7 @@ mod tests {
             updated_at: String::new(),
             favorite: None,
             last_read_at: None,
+            deleted_at: None,
         }
     }
 

@@ -102,6 +102,8 @@ pub fn to_knowledge_payloads(drafts: &[VisionDraft], source: &str) -> Vec<Knowle
         .iter()
         .map(|d| KnowledgePayload {
             id: format!("draft-{}", uuid()),
+            // Empty sync_id -> save() will mint a fresh UUIDv4 on insert.
+            sync_id: String::new(),
             question: d.question.trim().to_string(),
             answer: d.answer.trim().to_string(),
             domain: if d.domain.trim().is_empty() {
@@ -118,6 +120,7 @@ pub fn to_knowledge_payloads(drafts: &[VisionDraft], source: &str) -> Vec<Knowle
             updated_at: now.clone(),
             favorite: Some(false),
             last_read_at: None,
+            deleted_at: None,
         })
         .collect()
 }
