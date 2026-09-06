@@ -341,8 +341,12 @@ fn response_content_type(response: &reqwest::Response) -> String {
 fn parse_http_json(text: &str, content_type: &str) -> Result<serde_json::Value, LlmError> {
     if text.trim().is_empty() {
         return Err(LlmError::BadResponse {
-            message: "模型服务返回了空响应，请检查 API Base URL 是否为接口根路径（通常以 /v1 结尾）。"
-                .to_string(),
+            // Was: "请检查 API Base URL 是否为接口根路径（通常以 /v1 结尾）"
+            // That hint was wrong for the empty-body case — the URL is fine,
+            // the upstream just sent zero bytes. Suggest the actual suspects.
+            message:
+                "模型服务返回了空响应（HTTP 200 但 body 为空）。可能原因：上游 gateway/proxy 拦截、模型内部错误、或流式端点未关闭 stream。请打开诊断日志查看完整请求/响应上下文。"
+                    .to_string(),
             body: None,
         });
     }
@@ -353,10 +357,45 @@ fn parse_http_json(text: &str, content_type: &str) -> Result<serde_json::Value, 
             body: Some(truncate_for_log(text)),
         });
     }
-    serde_json::from_str(text).map_err(|e| LlmError::BadResponse {
+
+    // Reasoning / thinking models (DeepSeek-R1, QwQ, Qwen3-Thinking, ...)
+    // emit their chain-of-thought as `<think>...</think>` and some OpenAI-
+    // compatible providers concatenate that trace directly into the
+    // `content` field instead of routing it to `reasoning_content`. We
+    // strip the block here so the JSON parser can see the actual answer.
+    // When the body has no leading thinking block, this is a no-op.
+    let text = strip_thinking_block(text);
+
+    serde_json::from_str(&text).map_err(|e| LlmError::BadResponse {
         message: format!("响应不是合法 JSON（Content-Type: {content_type}）：{e}"),
-        body: Some(truncate_for_log(text)),
+        // Log the (possibly stripped) body — what we actually tried to
+        // parse. If stripping produced an empty string, the log banner
+        // will surround nothing, which is itself a useful signal.
+        body: Some(truncate_for_log(&text)),
     })
+}
+
+/// Strip a leading `<think>...</think>` block from a response body. Returns
+/// the input unchanged when there is no such block, so the function is safe
+/// to call unconditionally.
+///
+/// The match is intentionally literal and not regex-based: we only act on a
+/// `<think>` opening tag at the very start of the (trimmed) body, and we
+/// pair it with the *first* `</think>` after that. This handles the common
+/// single-block case and is conservative — anything weirder (malformed
+/// tags, interleaved text) falls through to the JSON parser, which will
+/// fail with a normal parse error and surface in the log.
+fn strip_thinking_block(text: &str) -> String {
+    let trimmed = text.trim_start();
+    if !trimmed.starts_with("<think>") {
+        return text.to_string();
+    }
+    match trimmed.find("</think>") {
+        Some(close) => trimmed[close + "</think>".len()..].trim_start().to_string(),
+        // Malformed: opening tag but no closing. Let the JSON parser fail
+        // naturally; the body still shows up in the log.
+        None => text.to_string(),
+    }
 }
 
 /// Cap the body we keep for diagnostics so a runaway upstream payload can't
@@ -526,5 +565,95 @@ mod tests {
         let m = parse_model_message(&msg);
         assert_eq!(m.tool_calls.len(), 1);
         assert_eq!(m.tool_calls[0].name, "y");
+    }
+
+    // ---- Reasoning / thinking-model body handling --------------------
+
+    /// A thinking-model body that interleaves a <think> block with the
+    /// answer must be reduced to just the answer by `strip_thinking_block`.
+    /// This is the exact failure mode the log file surfaced: a vision
+    /// endpoint returning `<think>...</think>` + JSON in the `content`
+    /// field, which our JSON parser then refused with "expected value at
+    /// line 1 column 1".
+    #[test]
+    fn strip_thinking_block_extracts_json_from_reasoning_body() {
+        let body = "<think>The image shows three modes of video generation. Let me extract them.\n\nStep 1: Read the image. Step 2: Organize.</think>\n\n{\"items\":[{\"question\":\"Q\",\"answer\":\"A\"}]}";
+        let out = strip_thinking_block(body);
+        assert!(!out.contains("<think>"), "thinking tag stripped");
+        assert!(!out.contains("</think>"), "thinking close tag stripped");
+        assert!(out.starts_with('{'), "result is the JSON: {out}");
+        // Must round-trip through serde_json.
+        let v: serde_json::Value = serde_json::from_str(&out).expect("valid JSON");
+        assert_eq!(v["items"][0]["question"], "Q");
+    }
+
+    /// Bodies that have no leading thinking block must be returned
+    /// unchanged. This is the safe-default for non-reasoning models; a
+    /// regression here would silently corrupt every plain response.
+    #[test]
+    fn strip_thinking_block_preserves_plain_json() {
+        let plain = r#"{"items":[{"question":"Q","answer":"A"}]}"#;
+        assert_eq!(strip_thinking_block(plain), plain);
+        // Even a leading newline before the JSON must be left intact.
+        let with_leading = "\n{\"items\":[]}";
+        assert_eq!(strip_thinking_block(with_leading), with_leading);
+    }
+
+    /// A body that opens a <think> but never closes it must pass through
+    /// unchanged so the JSON parser can fail with a normal, descriptive
+    /// error and the full body still appears in the log.
+    #[test]
+    fn strip_thinking_block_passes_malformed_through() {
+        let malformed = "<think>never closes\n{\"items\":[]}";
+        assert_eq!(strip_thinking_block(malformed), malformed);
+    }
+
+    /// `parse_http_json` must accept a thinking-model body and surface
+    /// the items it carried. End-to-end check that the production code
+    /// path can recover from a `<think>...</think>` concatenation.
+    #[test]
+    fn parse_http_json_handles_thinking_model_body() {
+        let body = "<think>Thinking aloud.</think>\n\n{\"items\":[]}";
+        let v = parse_http_json(body, "application/json").expect("parses");
+        assert_eq!(v["items"].as_array().unwrap().len(), 0);
+    }
+
+    /// A truly empty body must produce a `BadResponse` whose message
+    /// points at the actual suspects (gateway / model / stream), not at
+    /// the legacy "wrong API URL" hint that misled the user before.
+    #[test]
+    fn parse_http_json_empty_body_diagnostic_mentions_real_causes() {
+        let err = parse_http_json("", "application/json").unwrap_err();
+        let msg = match err {
+            LlmError::BadResponse { message, .. } => message,
+            other => panic!("expected BadResponse, got {other:?}"),
+        };
+        assert!(msg.contains("空响应"), "mentions empty body: {msg}");
+        assert!(
+            msg.contains("stream") || msg.contains("gateway") || msg.contains("proxy"),
+            "mentions a real upstream suspect: {msg}"
+        );
+        // Should NOT mislead with the legacy "API Base URL" suggestion.
+        assert!(
+            !msg.contains("API Base URL"),
+            "stops blaming the API URL for empty bodies: {msg}"
+        );
+    }
+
+    /// Bodies that consist only of a thinking block (no JSON after) must
+    /// reduce to an empty string and surface a clear JSON parse error,
+    /// not crash and not silently succeed.
+    #[test]
+    fn parse_http_json_thinking_only_body_fails_clearly() {
+        let body = "<think>only thinking, no answer</think>";
+        let err = parse_http_json(body, "application/json").unwrap_err();
+        // Becomes a BadResponse with the parse-error message and a body
+        // of ""; the log banner will show the empty body.
+        let (msg, body) = match err {
+            LlmError::BadResponse { message, body } => (message, body),
+            other => panic!("expected BadResponse, got {other:?}"),
+        };
+        assert!(msg.contains("不是合法 JSON"));
+        assert_eq!(body.as_deref(), Some(""));
     }
 }
