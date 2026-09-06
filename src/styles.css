@@ -87,6 +87,24 @@
 .restore-meta dd small.muted{color:var(--muted);font-size:11px}
 .restore-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:6px}
 
+/* Generic confirm dialog (reuses .restore-overlay + .restore-card). Tighter
+   than the restore flow because most confirms are just title + body + 2 btns. */
+.confirm-card{width:min(440px,90vw);padding:22px 24px}
+.confirm-card h3{font:600 18px var(--serif);margin:0 0 8px}
+.confirm-card .restore-lead{margin-bottom:0}
+
+/* "More" popover in the detail header. Sits in the top-right of the reader
+   toolbar and contains destructive actions (currently only delete). */
+.more-wrap{position:relative}
+.reader-actions .more-wrap>button{padding:4px 6px;border-radius:6px;color:var(--muted)}
+.reader-actions .more-wrap>button:hover{background:#f3f3f2;color:var(--ink)}
+.reader-actions .more-wrap>button.active{background:#eae9e6;color:var(--ink)}
+.more-menu{position:absolute;top:calc(100% + 6px);right:0;min-width:180px;background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:0 10px 30px rgba(0,0,0,.10);padding:4px;z-index:30}
+.more-menu button{width:100%;display:flex;align-items:center;gap:9px;padding:9px 12px;border-radius:6px;background:none;border:0;font-size:13px;color:#3a424d;text-align:left;cursor:pointer}
+.more-menu button:hover{background:#f5f5f3}
+.more-menu button.danger{color:#a33}
+.more-menu button.danger:hover{background:#fbecec}
+
 /* ============================================================== *
  *  Pad / Touch Adaptation (OPPO Pad Mini, CSS viewport driven)     *
  * ============================================================== *

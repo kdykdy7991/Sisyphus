@@ -436,6 +436,29 @@ pub fn soft_delete_by_sync_id(
     Ok(changed > 0)
 }
 
+/// Soft-delete a row by its local numeric `id` — the path used by the UI
+/// "delete" affordance. Mirrors `soft_delete_by_sync_id` semantically:
+/// stamps `deleted_at` (so the row stops appearing in `list`/`get`/`search`),
+/// drops the FTS row, and leaves the underlying row in place so a future
+/// backup/snapshot can still see the tombstone. Returns `true` when a row
+/// was actually transitioned active → tombstoned on this call; `false` when
+/// the row was already tombstoned or absent.
+pub fn soft_delete_by_id(
+    conn: &Connection,
+    id: i64,
+    deleted_at: &str,
+) -> rusqlite::Result<bool> {
+    let changed = conn.execute(
+        "UPDATE knowledge_items SET deleted_at = ?1
+         WHERE id = ?2 AND deleted_at IS NULL",
+        params![deleted_at, id],
+    )?;
+    if changed > 0 {
+        conn.execute("DELETE FROM knowledge_fts WHERE rowid = ?1", params![id])?;
+    }
+    Ok(changed > 0)
+}
+
 /// Insert a new row from a Sync snapshot. Skips the UI's `save` path
 /// because the Sync engine writes pre-merged state (and is the one place
 /// that may legitimately insert an already-tombstoned row). Refuses empty
@@ -1544,6 +1567,66 @@ mod tests {
             )
             .unwrap();
         assert_eq!(fts_after, 0, "FTS row removed on soft delete");
+    }
+
+    /// `soft_delete_by_id` is the UI's "delete this item" entry point. It
+    /// must:
+    ///   - hide the row from `list` / `get` (set `deleted_at`)
+    ///   - drop the FTS row (search must not return it)
+    ///   - return `true` exactly once (the active → tombstoned transition)
+    ///   - return `false` on a second call or an unknown id (idempotent)
+    #[test]
+    fn soft_delete_by_id_hides_row_and_clears_fts() {
+        let path = tmp_path("ui-soft-del-by-id");
+        let (conn, _) = open_inits(&path);
+        let p = save(&conn, &payload("MVCC 如何解决读写冲突？")).unwrap();
+        let kid: i64 = p.id.parse().unwrap();
+
+        // Pre-state: visible in list, findable via FTS.
+        assert!(list(&conn).unwrap().iter().any(|x| x.id == p.id));
+        let pre_search = search(&conn, "MVCC", true).unwrap();
+        assert!(pre_search.iter().any(|x| x.id == p.id),
+                "active row is in FTS before delete");
+
+        // First delete: active → tombstoned.
+        let first = soft_delete_by_id(&conn, kid, "1700000000").unwrap();
+        assert!(first, "first call returns true (transitioned)");
+
+        // Post-state: hidden from list, hidden from FTS, get returns None.
+        assert!(!list(&conn).unwrap().iter().any(|x| x.id == p.id),
+                "deleted row is no longer in list()");
+        assert!(get(&conn, &p.id).unwrap().is_none(),
+                "get() hides tombstoned rows");
+        let post_search = search(&conn, "MVCC", true).unwrap();
+        assert!(!post_search.iter().any(|x| x.id == p.id),
+                "deleted row is not in FTS results");
+
+        // Underlying row is still on disk (tombstone preserved for sync).
+        let row = conn
+            .query_row(
+                "SELECT deleted_at FROM knowledge_items WHERE id = ?1",
+                params![kid],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .unwrap();
+        assert_eq!(row.as_deref(), Some("1700000000"),
+                   "underlying row kept, only deleted_at is stamped");
+
+        // Second delete: idempotent — returns false, no state change.
+        let second = soft_delete_by_id(&conn, kid, "1700000001").unwrap();
+        assert!(!second, "second call returns false (already tombstoned)");
+        let row2 = conn
+            .query_row(
+                "SELECT deleted_at FROM knowledge_items WHERE id = ?1",
+                params![kid],
+                |r| r.get::<_, Option<String>>(0),
+            )
+            .unwrap();
+        assert_eq!(row2.as_deref(), Some("1700000000"),
+                   "second delete does not overwrite the original deleted_at");
+
+        // Unknown id: false, no error.
+        assert!(!soft_delete_by_id(&conn, 999_999, "1700000002").unwrap());
     }
 
     /// `insert_from_sync` and `update_from_sync` must keep FTS in lockstep

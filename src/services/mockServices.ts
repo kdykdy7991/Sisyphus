@@ -14,6 +14,11 @@ export const knowledgeService: KnowledgeService = {
   async search(query) { const q = query.toLowerCase(); return knowledge.filter(item => [item.question, item.answer, item.domain, item.topic, ...item.tags].join(' ').toLowerCase().includes(q)); },
   async save(item) { const index = knowledge.findIndex(entry => entry.id === item.id); if (index >= 0) knowledge[index] = item; else knowledge = [item, ...knowledge]; return item; },
   async recent(limit = 10) { return [...knowledge].slice(0, limit); },
+  async delete(id) {
+    const before = knowledge.length;
+    knowledge = knowledge.filter(item => item.id !== id);
+    return knowledge.length < before;
+  },
   async clear() {
     const removed = knowledge.length;
     knowledge = [];
@@ -144,4 +149,13 @@ export const webdavService: WebDavService = {
       retryCount: 0,
     };
   },
+};
+
+// Under mock there is no on-disk log folder; return a fake absolute path
+// string so the UI's "logs are at: …" text still renders something useful
+// (vite dev box, no real diagnostic behind it). `openDir` is a no-op here
+// — clicking the button under mock should be harmless.
+export const logsService = {
+  async openDir(): Promise<void> { /* no-op under mock */ },
+  async getDir(): Promise<string> { return '(mock) 内存模式，无日志目录'; },
 };

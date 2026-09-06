@@ -35,7 +35,16 @@ pub enum LlmError {
         body: String,
     },
     /// Response body couldn't be decoded as expected.
-    BadResponse(String),
+    ///
+    /// `message` is the user-facing summary; `body` is the raw response text
+    /// (truncated for safety) preserved so the log layer can capture the
+    /// upstream payload for diagnosis. Without `body`, errors like "响应缺少
+    /// message.content" tell the user nothing about WHY the content was
+    /// missing (content filter, reasoning model, multimodal array, ...).
+    BadResponse {
+        message: String,
+        body: Option<String>,
+    },
 }
 
 impl std::fmt::Display for LlmError {
@@ -47,7 +56,12 @@ impl std::fmt::Display for LlmError {
             LlmError::Api { status, body } => {
                 write!(f, "模型服务返回错误（HTTP {status}）：{body}")
             }
-            LlmError::BadResponse(m) => write!(f, "模型返回内容无效：{m}"),
+            LlmError::BadResponse { message, body: _ } => {
+                // Body intentionally not in the user-visible string — it can be
+                // long, sometimes contains upstream internal state, and the
+                // dedicated log file is the right place to read it.
+                write!(f, "模型返回内容无效：{message}")
+            }
         }
     }
 }
@@ -171,7 +185,10 @@ impl OpenAiCompatClient {
         let text = request
             .text()
             .await
-            .map_err(|e| LlmError::BadResponse(e.to_string()))?;
+            .map_err(|e| LlmError::BadResponse {
+                message: format!("读取响应体失败：{e}"),
+                body: None,
+            })?;
         if !status.is_success() {
             return Err(LlmError::Api {
                 status: status.as_u16(),
@@ -183,9 +200,18 @@ impl OpenAiCompatClient {
         let content = parsed
             .pointer("/choices/0/message/content")
             .and_then(|c| c.as_str())
-            .ok_or_else(|| LlmError::BadResponse("响应缺少 message.content".to_string()))?;
-        serde_json::from_str(content)
-            .map_err(|e| LlmError::BadResponse(format!("内容不是合法 JSON：{e}")))
+            .ok_or_else(|| LlmError::BadResponse {
+                // Carry the raw response so a downstream logger can show the
+                // full payload (finish_reason, reasoning_content, content
+                // array, etc.) when this fires. The Display impl hides the
+                // body from the UI; the log file reveals it.
+                message: "响应缺少 message.content".to_string(),
+                body: Some(truncate_for_log(&text)),
+            })?;
+        serde_json::from_str(content).map_err(|e| LlmError::BadResponse {
+            message: format!("内容不是合法 JSON：{e}"),
+            body: Some(truncate_for_log(content)),
+        })
     }
 
     /// Standard OpenAI-compatible tool-calling chat completion.
@@ -225,7 +251,10 @@ impl OpenAiCompatClient {
         let text = request
             .text()
             .await
-            .map_err(|e| LlmError::BadResponse(e.to_string()))?;
+            .map_err(|e| LlmError::BadResponse {
+                message: format!("读取响应体失败：{e}"),
+                body: None,
+            })?;
         if !status.is_success() {
             return Err(LlmError::Api {
                 status: status.as_u16(),
@@ -235,7 +264,10 @@ impl OpenAiCompatClient {
         let parsed = parse_http_json(&text, &content_type)?;
         let message = parsed
             .pointer("/choices/0/message")
-            .ok_or_else(|| LlmError::BadResponse("响应缺少 choices[0].message".to_string()))?;
+            .ok_or_else(|| LlmError::BadResponse {
+                message: "响应缺少 choices[0].message".to_string(),
+                body: Some(truncate_for_log(&text)),
+            })?;
         Ok(parse_model_message(message))
     }
 
@@ -254,15 +286,22 @@ impl OpenAiCompatClient {
         let text = response
             .text()
             .await
-            .map_err(|e| LlmError::BadResponse(e.to_string()))?;
+            .map_err(|e| LlmError::BadResponse {
+                message: format!("读取响应体失败：{e}"),
+                body: None,
+            })?;
         if !status.is_success() {
             return Err(LlmError::Api {
                 status: status.as_u16(),
                 body: sanitize_error_body(&text),
             });
         }
-        let parsed: serde_json::Value =
-            serde_json::from_str(&text).map_err(|e| LlmError::BadResponse(e.to_string()))?;
+        let parsed: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+            LlmError::BadResponse {
+                message: format!("/models 响应不是合法 JSON：{e}"),
+                body: Some(truncate_for_log(&text)),
+            }
+        })?;
         let models = parsed
             .pointer("/data")
             .and_then(|d| d.as_array())
@@ -301,22 +340,45 @@ fn response_content_type(response: &reqwest::Response) -> String {
 
 fn parse_http_json(text: &str, content_type: &str) -> Result<serde_json::Value, LlmError> {
     if text.trim().is_empty() {
-        return Err(LlmError::BadResponse(
-            "模型服务返回了空响应，请检查 API Base URL 是否为接口根路径（通常以 /v1 结尾）。"
+        return Err(LlmError::BadResponse {
+            message: "模型服务返回了空响应，请检查 API Base URL 是否为接口根路径（通常以 /v1 结尾）。"
                 .to_string(),
-        ));
+            body: None,
+        });
     }
     if content_type.contains("text/html") || text.trim_start().starts_with("<!doctype html") {
-        return Err(LlmError::BadResponse(
-            "API Base URL 指向了网页而不是模型接口，请填写接口根路径（通常以 /v1 结尾）。"
+        return Err(LlmError::BadResponse {
+            message: "API Base URL 指向了网页而不是模型接口，请填写接口根路径（通常以 /v1 结尾）。"
                 .to_string(),
-        ));
+            body: Some(truncate_for_log(text)),
+        });
     }
-    serde_json::from_str(text).map_err(|e| {
-        LlmError::BadResponse(format!(
-            "响应不是合法 JSON（Content-Type: {content_type}）：{e}"
-        ))
+    serde_json::from_str(text).map_err(|e| LlmError::BadResponse {
+        message: format!("响应不是合法 JSON（Content-Type: {content_type}）：{e}"),
+        body: Some(truncate_for_log(text)),
     })
+}
+
+/// Cap the body we keep for diagnostics so a runaway upstream payload can't
+/// balloon a single log entry or an error message. 16 KB is enough to capture
+/// any realistic chat-completions response (the multimodal-array case, the
+/// content-filter case, the reasoning case all fit comfortably).
+const LOG_BODY_MAX_BYTES: usize = 16 * 1024;
+
+fn truncate_for_log(text: &str) -> String {
+    if text.len() <= LOG_BODY_MAX_BYTES {
+        return text.to_string();
+    }
+    // Truncate at a char boundary so we never split a multi-byte UTF-8 sequence.
+    let mut idx = LOG_BODY_MAX_BYTES;
+    while !text.is_char_boundary(idx) {
+        idx -= 1;
+    }
+    format!(
+        "{}…\n[truncated, original {} bytes]",
+        &text[..idx],
+        text.len()
+    )
 }
 
 /// Server-produced error bodies occasionally leak request payloads; keep only

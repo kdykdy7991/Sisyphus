@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useApp } from '../AppContext';
 import { knowledgeService } from '../services';
@@ -11,6 +11,7 @@ import {
   Star,
   PenLine,
   MoreHorizontal,
+  Trash2,
   Plus,
   Save,
   Tags,
@@ -18,7 +19,7 @@ import {
   Clock,
   Filter,
 } from '../components/Icons';
-import { Button, Input, Tag, Textarea, Empty, Spinner } from '../components/UI';
+import { Button, Input, Tag, Textarea, Empty, Spinner, Confirm } from '../components/UI';
 import { Drawer } from '../components/Drawer';
 import { useMediaQuery } from '../hooks/useMediaQuery';
 
@@ -397,6 +398,10 @@ export function KnowledgeDetailPage() {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<Knowledge>();
   const [railOpen, setRailOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const moreRef = useRef<HTMLDivElement>(null);
 
   const twoPane = useMediaQuery('(min-width: 700px)');
   useEffect(() => {
@@ -409,6 +414,26 @@ export function KnowledgeDetailPage() {
       setDraft(x);
     });
   }, [id, knowledge]);
+
+  // Click outside (or ESC) closes the "more" popover so the menu doesn't
+  // linger after the user moves on.
+  useEffect(() => {
+    if (!moreOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (moreRef.current && !moreRef.current.contains(e.target as Node)) {
+        setMoreOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMoreOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [moreOpen]);
 
   const related = useMemo(
     () =>
@@ -434,6 +459,20 @@ export function KnowledgeDetailPage() {
     await refresh();
     setItem(draft);
     setEditing(false);
+  };
+
+  const confirmDeleteItem = async () => {
+    if (deleting) return;
+    setDeleting(true);
+    try {
+      await knowledgeService.delete(item.id);
+      await refresh();
+      setMoreOpen(false);
+      setConfirmDelete(false);
+      nav('/knowledge');
+    } finally {
+      setDeleting(false);
+    }
   };
 
   return (
@@ -477,9 +516,31 @@ export function KnowledgeDetailPage() {
             <PenLine />
             <span className="reader-action-text">编辑</span>
           </button>
-          <button aria-label="更多操作">
-            <MoreHorizontal />
-          </button>
+          <div className="more-wrap" ref={moreRef}>
+            <button
+              aria-label="更多操作"
+              aria-expanded={moreOpen}
+              aria-haspopup="menu"
+              onClick={() => setMoreOpen(v => !v)}
+              className={moreOpen ? 'active' : ''}
+            >
+              <MoreHorizontal />
+            </button>
+            {moreOpen && (
+              <div className="more-menu" role="menu">
+                <button
+                  role="menuitem"
+                  className="danger"
+                  onClick={() => {
+                    setMoreOpen(false);
+                    setConfirmDelete(true);
+                  }}
+                >
+                  <Trash2 /> 删除这条知识
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
         {editing ? (
@@ -593,6 +654,23 @@ export function KnowledgeDetailPage() {
       >
         <DetailRail item={item} related={related} />
       </Drawer>
+
+      <Confirm
+        open={confirmDelete}
+        title="删除这条知识？"
+        body={
+          <>
+            这条知识将从知识库中移除，列表与搜索中不再出现。
+            <br />
+            <small>当前没有自动同步，本次删除不会传播到其他设备；如需恢复请在下次手动备份前操作。</small>
+          </>
+        }
+        confirmText={deleting ? '删除中…' : '删除'}
+        cancelText="取消"
+        destructive
+        onCancel={() => !deleting && setConfirmDelete(false)}
+        onConfirm={confirmDeleteItem}
+      />
     </div>
   );
 }

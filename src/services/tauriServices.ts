@@ -23,6 +23,12 @@ export const knowledgeService: KnowledgeService = {
   async recent(limit = 10): Promise<Knowledge[]> {
     return invoke('knowledge_recent', { limit });
   },
+  // Soft-delete a single knowledge item. Returns true when the row was
+  // actually transitioned active → tombstoned; false when the id is unknown
+  // or already tombstoned. The UI guards this with an explicit confirm.
+  async delete(id): Promise<boolean> {
+    return invoke<boolean>('knowledge_delete', { id });
+  },
   // Irreversible: wipes knowledge_items plus derived tags/topics/FTS and
   // returns how many items were removed. Guarded by a confirm in Settings.
   async clear(): Promise<number> {
@@ -229,5 +235,17 @@ export const webdavService: WebDavService = {
   },
   async sync(): Promise<WebDavSyncSummary> {
     return invoke<WebDavSyncSummary>('sync_webdav');
+  },
+};
+
+// Diagnostic log access. The Rust side writes every LLM failure to
+// `app_data_dir/logs/app-YYYY-MM-DD.log`; these commands let the Settings
+// page open that folder in Finder/Explorer or display the path as text.
+export const logsService = {
+  async openDir(): Promise<void> {
+    await invoke('log_open_dir');
+  },
+  async getDir(): Promise<string> {
+    return invoke<string>('log_get_dir');
   },
 };

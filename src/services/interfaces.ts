@@ -1,5 +1,5 @@
 import type {BackupInspect,BackupRestoreResult,BackupSummary,ChatMessage,ConnectionResult,ImportImage,Knowledge,Settings,SimilaritySuggestion,SyncExportSummary,SyncImportSummary,SyncInspectReport,WebDavConfig,WebDavSyncSummary,WebDavTestResult} from '../types';
-export interface KnowledgeService{list():Promise<Knowledge[]>;get(id:string):Promise<Knowledge|undefined>;search(query:string):Promise<Knowledge[]>;save(item:Knowledge):Promise<Knowledge>;recent(limit?:number):Promise<Knowledge[]>;clear():Promise<number>}
+export interface KnowledgeService{list():Promise<Knowledge[]>;get(id:string):Promise<Knowledge|undefined>;search(query:string):Promise<Knowledge[]>;save(item:Knowledge):Promise<Knowledge>;recent(limit?:number):Promise<Knowledge[]>;delete(id:string):Promise<boolean>;clear():Promise<number>}
 export interface ImportService{extract(images:ImportImage[],onProgress:(images:ImportImage[])=>void):Promise<ImportImage[]>;confirm(items:Knowledge[]):Promise<void>;suggestSimilarity(draft:Knowledge):Promise<SimilaritySuggestion|null>;updateExisting(draft:Knowledge,existingId:string):Promise<void>}
 export interface ChatService{ask(question:string,scope:string,history:ChatMessage[]):Promise<ChatMessage>}
 export interface SettingsService{get():Promise<Settings>;save(value:Settings):Promise<void>;testConnection():Promise<ConnectionResult>}
@@ -34,4 +34,12 @@ export interface WebDavService{
   saveConfig(config:WebDavConfig):Promise<void>;
   testConnection():Promise<WebDavTestResult>;
   sync():Promise<WebDavSyncSummary>;
+}
+
+// Diagnostic log access. `openDir` asks the OS to reveal the log folder in
+// Finder/Explorer; `getDir` returns the absolute path as text so the UI
+// can show it when the OS file manager fails to launch (sandboxed envs).
+export interface LogsService{
+  openDir():Promise<void>;
+  getDir():Promise<string>;
 }

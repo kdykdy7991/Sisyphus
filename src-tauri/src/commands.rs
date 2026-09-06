@@ -6,6 +6,7 @@ use crate::config::{ApiConfig, ApiConfigState};
 use crate::config::{self, WebDavConfig, WebDavConfigState};
 use crate::db::{self, Db, KnowledgePayload};
 use crate::llm::{LlmError, ModelMessage, OpenAiCompatClient};
+use crate::log::{self, LogState};
 use crate::similarity;
 use crate::sync;
 use crate::vision;
@@ -60,6 +61,7 @@ pub struct ConnectionResult {
 #[tauri::command]
 pub async fn settings_test_connection(
     config_state: State<'_, ApiConfigState>,
+    log_state: State<'_, LogState>,
 ) -> Result<ConnectionResult, String> {
     let cfg = config_state.inner.lock().unwrap().clone();
     if cfg.api_key.trim().is_empty() {
@@ -79,7 +81,13 @@ pub async fn settings_test_connection(
             };
             ConnectionResult { ok: true, message }
         }
-        Err(e) => ConnectionResult { ok: false, message: e.to_string() },
+        Err(e) => {
+            // The "test connection" path is the user's first stop when
+            // uploads mysteriously fail. Always log here so the diagnostic
+            // is on disk even if the user dismisses the UI error.
+            log::append_failure(&log_state, "settings_test_connection", &e);
+            ConnectionResult { ok: false, message: e.to_string() }
+        }
     };
     Ok(result)
 }
@@ -88,9 +96,14 @@ pub async fn settings_test_connection(
 /// `image_data_url` is a `data:image/...;base64,...` URL built in the frontend
 /// from the in-memory object URL — it never touches disk. Returns structured,
 /// validated drafts (never raw model text).
+///
+/// Failures are mirrored to the diagnostic log (`logs/app-YYYY-MM-DD.log`)
+/// so the user can open the log folder from Settings and see the raw
+/// upstream response body, not just the user-facing summary.
 #[tauri::command]
 pub async fn vision_extract(
     config_state: State<'_, ApiConfigState>,
+    log_state: State<'_, LogState>,
     image_data_url: String,
     source: String,
 ) -> Result<Vec<KnowledgePayload>, String> {
@@ -101,7 +114,10 @@ pub async fn vision_extract(
     let client = OpenAiCompatClient::new(cfg.api_base_url, cfg.api_key, cfg.vision_model);
     vision::extract_from_image(&client, &image_data_url, &source)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| {
+            log::append_failure(&log_state, "vision_extract", &e);
+            e.to_string()
+        })
 }
 
 /// A knowledge-organization suggestion surfaced in Review before Confirm.
@@ -214,6 +230,7 @@ pub struct ChatHistoryEntry {
 pub async fn knowledge_chat(
     db: State<'_, Db>,
     config_state: State<'_, ApiConfigState>,
+    log_state: State<'_, LogState>,
     question: String,
     scope: String,
     history: Vec<ChatHistoryEntry>,
@@ -265,7 +282,14 @@ pub async fn knowledge_chat(
 
     let (answer, pool) = chat::run_chat_loop(base, chat::MAX_TOOL_ROUNDS, &mut call, &mut run_tool)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e: String| {
+            // run_chat_loop returns String errors (LlmError is converted inside
+            // the loop), so we don't have access to the response body here.
+            // Log what we have — the upstream body is also captured by
+            // `log::append_failure` if the loop re-throws the LlmError.
+            log::append(&log_state, "knowledge_chat", &e);
+            e
+        })?;
     let (answer, citations) = chat::normalize_citations(&answer, &pool);
 
     Ok(ChatResult {
@@ -326,6 +350,22 @@ pub fn knowledge_recent(state: State<'_, Db>, limit: Option<usize>) -> Result<Ve
 pub fn knowledge_clear(state: State<'_, Db>) -> Result<usize, String> {
     let conn = state.conn.lock().unwrap();
     db::clear(&conn).map_err(|e| e.to_string())
+}
+
+/// Soft-delete a single knowledge item by its local `id`. Stamps `deleted_at`
+/// (so list/search/get stop returning it) and drops its FTS row. The
+/// underlying row stays in place so future backups/snapshots still carry
+/// the tombstone. Returns `true` if a row was actually transitioned active →
+/// tombstoned; `false` if the id is unknown or already tombstoned. The UI
+/// guards this with an explicit confirm.
+#[tauri::command]
+pub fn knowledge_delete(state: State<'_, Db>, id: String) -> Result<bool, String> {
+    let kid: i64 = id
+        .parse()
+        .map_err(|_| format!("knowledge id 必须是数字：{id}"))?;
+    let now = chrono::Utc::now().format("%Y-%m-%d %H:%M").to_string();
+    let conn = state.conn.lock().unwrap();
+    db::soft_delete_by_id(&conn, kid, &now).map_err(|e| e.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -601,4 +641,34 @@ pub fn backup_restore(
         let _ = std::fs::remove_file(&safety_path);
     }
     outcome
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostic log access (Settings → "打开日志目录" affordance).
+// ---------------------------------------------------------------------------
+
+/// Open the diagnostic log directory in the OS file manager. The directory
+/// is created at app startup; if for some reason it is missing we recreate
+/// it before revealing, so the user always lands on a real folder.
+#[tauri::command]
+pub fn log_open_dir(log_state: State<'_, LogState>) -> Result<(), String> {
+    let path = log_state.log_dir().to_path_buf();
+    if !path.is_dir() {
+        std::fs::create_dir_all(&path)
+            .map_err(|e| format!("无法创建日志目录：{e}"))?;
+    }
+    log::reveal_in_file_manager(&path).map_err(|e| format!("无法打开日志目录：{e}"))?;
+    log::append(
+        &log_state,
+        "session",
+        &format!("open log dir {}", path.display()),
+    );
+    Ok(())
+}
+
+/// Return the on-disk path of the log directory so the UI can show it as
+/// text (helps users on platforms where the file manager didn't pop up).
+#[tauri::command]
+pub fn log_get_dir(log_state: State<'_, LogState>) -> Result<String, String> {
+    Ok(log_state.log_dir().display().to_string())
 }

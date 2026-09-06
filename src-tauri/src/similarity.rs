@@ -102,7 +102,10 @@ pub async fn judge(
     ];
     let content = client.chat_json(messages, 800).await?;
     let candidate_ids: Vec<String> = candidates.iter().map(|c| c.id.clone()).collect();
-    parse_verdict(&content, &candidate_ids).map_err(LlmError::BadResponse)
+    parse_verdict(&content, &candidate_ids).map_err(|e| LlmError::BadResponse {
+        message: e,
+        body: Some(content.to_string()),
+    })
 }
 
 /// Parse and strictly validate the model's structured output. Rejects unknown

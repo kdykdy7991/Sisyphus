@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useApp } from '../AppContext';
-import { backupService, knowledgeService, settingsService, webdavService } from '../services';
+import { backupService, knowledgeService, logsService, settingsService, webdavService } from '../services';
 import type { BackupInspect, Settings, WebDavConfig } from '../types';
-import { AlertCircle, Check, Database, Download, Eye, EyeOff, FolderOpen, LoaderCircle, RotateCcw, Trash2 } from '../components/Icons';
+import { AlertCircle, Check, Database, Download, Eye, EyeOff, FileText, FolderOpen, LoaderCircle, RotateCcw, Trash2 } from '../components/Icons';
 import { Button, Input } from '../components/UI';
 
 type Flash = { kind: 'ok' | 'err'; text: string } | null;
@@ -40,6 +40,14 @@ export function SettingsPage() {
   const [wdBusy, setWdBusy] = useState<'save' | 'test' | 'sync' | null>(null);
   const [wdFlash, setWdFlash] = useState<Flash>(null);
 
+  // Diagnostic log directory (set once on mount under Tauri; mock returns a
+  // placeholder string). Surfaced as text under the "open log folder"
+  // button so users can copy the path if the OS file manager fails to pop.
+  const [logDirPath, setLogDirPath] = useState('');
+  useEffect(() => {
+    logsService.getDir().then(setLogDirPath).catch(() => setLogDirPath(''));
+  }, []);
+
   useEffect(() => {
     settingsService.get().then(setS);
     webdavService.getConfig().then(setWd);
@@ -69,6 +77,18 @@ export function SettingsPage() {
     });
     setState('saved');
     setTimeout(() => setState(''), 1500);
+  };
+
+  // Best-effort: ask the OS to open the log directory. If it fails (rare,
+  // usually a sandboxed env) we still have the path string rendered below
+  // the button so the user can copy it manually.
+  const openLogsDir = async () => {
+    setFlash(null);
+    try {
+      await logsService.openDir();
+    } catch (e) {
+      setFlash({ kind: 'err', text: `无法打开日志目录：${String(e)}` });
+    }
   };
 
   const startBackup = async () => {
@@ -331,6 +351,28 @@ export function SettingsPage() {
             </button>
           </div>
           {flash && <p className={`conn-msg ${flash.kind === 'err' ? 'err' : 'ok'}`} style={{ marginTop: 12 }}>{flash.text}</p>}
+        </section>
+
+        <section>
+          <div className="settings-heading">
+            <h2>诊断日志</h2>
+            <p>模型提取失败、Chat 报错等诊断信息会写入本地日志文件，文件名按天滚动。如果遇到无法解释的失败，可以打开日志目录把日志发给开发者。</p>
+          </div>
+          <div className="data-actions">
+            <button onClick={openLogsDir} disabled={busy !== null}>
+              <FileText />
+              <span>
+                <b>打开日志目录</b>
+                <small>在文件管理器中显示今日的 app-YYYY-MM-DD.log</small>
+              </span>
+              <FolderOpen />
+            </button>
+          </div>
+          {logDirPath && (
+            <p className="conn-msg ok" style={{ marginTop: 12, fontFamily: 'monospace', fontSize: 12 }}>
+              {logDirPath}
+            </p>
+          )}
         </section>
 
         <section>

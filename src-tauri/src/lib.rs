@@ -1,18 +1,20 @@
-mod db;
+mod backup;
+mod chat;
 mod commands;
 mod config;
+mod db;
 mod llm;
-mod vision;
+mod log;
 mod similarity;
-mod chat;
-mod tokenizer;
-mod backup;
 mod sync;
+mod tokenizer;
+mod vision;
 mod webdav;
 
 use tauri::Manager;
 use config::{ApiConfigState, WebDavConfigState};
 use db::Db;
+use log::LogState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -41,7 +43,13 @@ pub fn run() {
                 data_dir: data_dir.clone(),
                 inner: std::sync::Mutex::new(webdav_cfg),
             });
-            eprintln!("[interview-kit] database ready at {} (trigram_fts={})", db_location, trigram);
+            // Diagnostic log directory under app data dir. Managed as state
+            // so Tauri commands can write to it without re-resolving the
+            // path on every call.
+            let log_dir = log::init(&data_dir)?;
+            let log_state = LogState::new(log_dir.clone());
+            log::append(&log_state, "session", &format!("database ready at {db_location} (trigram_fts={trigram})"));
+            app.manage(log_state);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -67,6 +75,8 @@ pub fn run() {
             commands::webdav_config_save,
             commands::webdav_test_connection,
             commands::sync_webdav,
+            commands::log_open_dir,
+            commands::log_get_dir,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Interview Kit");

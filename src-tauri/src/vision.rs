@@ -244,7 +244,14 @@ async fn run_extraction(
     max_tokens: u32,
 ) -> Result<Vec<KnowledgePayload>, crate::llm::LlmError> {
     let content = client.chat_json(messages, max_tokens).await?;
-    let drafts = parse_drafts(&content.to_string()).map_err(crate::llm::LlmError::BadResponse)?;
+    let drafts = parse_drafts(&content.to_string()).map_err(|e| {
+        // The model returned JSON but our schema validation rejected it; the
+        // raw text is the most useful diagnostic.
+        crate::llm::LlmError::BadResponse {
+            message: e,
+            body: Some(content.to_string()),
+        }
+    })?;
     Ok(to_knowledge_payloads(&drafts, source))
 }
 
