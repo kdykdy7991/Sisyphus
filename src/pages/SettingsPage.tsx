@@ -109,12 +109,22 @@ export function SettingsPage() {
   };
   const saveProfile = async () => {
     if (!profiles || !profileName.trim()) return;
-    await settingsService.renameProfile(profiles.activeId, profileName.trim());
-    await settingsService.save(s);
-    setProfiles(await settingsService.profiles());
-    setState('saved');
-    setTimeout(() => setState(''), 1500);
-    setProfileManagerOpen(false);
+    if (s.visionMaxTokens > s.visionContextTokens) {
+      setState('fail');
+      setMsg('Vision 最大输出 Token 不能超过模型上下文大小。');
+      return;
+    }
+    try {
+      await settingsService.save(s);
+      await settingsService.renameProfile(profiles.activeId, profileName.trim());
+      setProfiles(await settingsService.profiles());
+      setState('saved');
+      setTimeout(() => setState(''), 1500);
+      setProfileManagerOpen(false);
+    } catch (error) {
+      setState('fail');
+      setMsg(String(error));
+    }
   };
 
   // Best-effort: ask the OS to open the log directory. If it fails (rare,
@@ -481,7 +491,9 @@ export function SettingsPage() {
               <label>API Key<div className="password"><Input type={show ? 'text' : 'password'} value={s.apiKey} placeholder="sk-••••••••••••" onChange={(e) => set('apiKey', e.target.value)} /><button onClick={() => setShow(!show)}>{show ? <EyeOff /> : <Eye />}</button></div></label>
               <label>Chat Model<Input value={s.chatModel} onChange={(e) => set('chatModel', e.target.value)} /></label>
               <label>Vision Model<Input value={s.visionModel} onChange={(e) => set('visionModel', e.target.value)} /></label>
+              <label>模型上下文大小<Input type="number" min={1} step={1024} value={s.visionContextTokens} onChange={e => setS({...s, visionContextTokens: Math.max(1, Number(e.target.value) || 1)})} /><small className="field-hint">模型支持的总上下文 Token；128K = 131072。</small></label>
               <label>Vision 最大输出 Token<Input type="number" min={1} step={1024} value={s.visionMaxTokens} onChange={e => setS({...s, visionMaxTokens: Math.max(1, Number(e.target.value) || 1)})} /><small className="field-hint">32K = 32768；具体上限取决于模型服务。</small></label>
+              <div className="thinking-control"><label className="thinking-toggle"><input type="checkbox" checked={s.visionThinkingEnabled} onChange={e => setS({...s, visionThinkingEnabled: e.target.checked})}/><span><b>启用模型思考</b><small>关闭时向兼容接口发送 reasoning_effort: none。</small></span></label><label>思考强度<select className="input" disabled={!s.visionThinkingEnabled} value={s.visionReasoningEffort} onChange={e => setS({...s, visionReasoningEffort: e.target.value as Settings['visionReasoningEffort']})}><option value="low">低</option><option value="medium">中</option><option value="high">高</option></select></label></div>
             </div>
             {msg && <p className={state === 'fail' ? 'conn-msg err' : 'conn-msg ok'}>{msg}</p>}
             <div className="restore-actions"><Button onClick={test}>{state === 'testing' ? <><LoaderCircle className="spin" /> 测试中</> : state === 'ok' ? <><Check /> 连接正常</> : state === 'fail' ? '测试失败' : '测试连接'}</Button><Button variant="primary" disabled={!profileName.trim()} onClick={()=>void saveProfile()}>保存配置</Button></div>

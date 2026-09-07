@@ -465,6 +465,10 @@ h1,h2,h3,p{margin-top:0}
 .profile-form label{min-width:0}
 .profile-name-field{grid-column:1/-1}
 .field-hint{display:block;margin-top:5px;color:var(--muted);font-size:11px;line-height:1.45}
+.thinking-control{grid-column:1/-1;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;align-items:end;margin-top:4px;padding:13px 14px;background:#f7f7f6;border-radius:7px}
+.thinking-toggle{display:flex;align-items:center;gap:10px;min-height:40px;cursor:pointer}
+.thinking-toggle input{width:17px;height:17px;accent-color:#242424}
+.thinking-toggle span{display:flex;flex-direction:column;gap:3px}.thinking-toggle b{font-size:13px;color:#25282c}.thinking-toggle small{font-size:11px;color:var(--muted);line-height:1.4}
 .profile-manager>.conn-msg{margin:0 24px 14px;padding:9px 12px;border-radius:6px;font-size:12px}
 .profile-manager>.restore-actions{padding:14px 24px;margin:0;border-top:1px solid var(--line)}
 
@@ -831,6 +835,8 @@ button,a{transition:background .14s ease,color .14s ease,border-color .14s ease}
   .profile-create{grid-template-columns:minmax(0,1fr);padding:12px 18px}
 
   .profile-form{grid-template-columns:minmax(0,1fr);padding:16px 18px}
+
+  .thinking-control{grid-template-columns:minmax(0,1fr)}
 
   .profile-manager>.restore-actions{padding:12px 18px}
 

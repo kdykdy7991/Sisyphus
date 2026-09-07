@@ -133,6 +133,7 @@ pub struct OpenAiCompatClient {
     base_url: String,
     api_key: String,
     model: String,
+    reasoning_effort: Option<String>,
 }
 
 impl OpenAiCompatClient {
@@ -147,7 +148,13 @@ impl OpenAiCompatClient {
             base_url,
             api_key,
             model,
+            reasoning_effort: None,
         }
+    }
+
+    pub fn with_reasoning(mut self, enabled: bool, effort: String) -> Self {
+        self.reasoning_effort = Some(if enabled { effort } else { "none".to_string() });
+        self
     }
 
     fn chat_endpoint(&self) -> String {
@@ -162,7 +169,7 @@ impl OpenAiCompatClient {
         messages: Vec<serde_json::Value>,
         max_tokens: u32,
     ) -> Result<serde_json::Value, LlmError> {
-        let body = serde_json::json!({
+        let mut body = serde_json::json!({
             "model": self.model,
             "messages": messages,
             "temperature": 0.2,
@@ -170,6 +177,9 @@ impl OpenAiCompatClient {
             "stream": false,
             "response_format": { "type": "json_object" },
         });
+        if let Some(effort) = &self.reasoning_effort {
+            body["reasoning_effort"] = serde_json::Value::String(effort.clone());
+        }
 
         let request = self
             .http
@@ -233,6 +243,9 @@ impl OpenAiCompatClient {
         });
         if let Some(t) = tools {
             body["tools"] = t.clone();
+        }
+        if let Some(effort) = &self.reasoning_effort {
+            body["reasoning_effort"] = serde_json::Value::String(effort.clone());
         }
 
         let request = self

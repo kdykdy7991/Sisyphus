@@ -63,6 +63,14 @@ pub fn settings_get(state: State<'_, ApiConfigState>) -> ApiConfig {
 /// empty so the UI can save the rest of the config without re-echoing the key.
 #[tauri::command]
 pub fn settings_save(state: State<'_, ApiConfigState>, config: ApiConfig) -> Result<(), String> {
+    let context_tokens = config.vision_context_tokens.max(1);
+    let max_tokens = config.vision_max_tokens.max(1);
+    if max_tokens > context_tokens {
+        return Err("Vision 最大输出 Token 不能超过模型上下文大小。".into());
+    }
+    if !matches!(config.vision_reasoning_effort.as_str(), "low" | "medium" | "high") {
+        return Err("思考强度必须是 low、medium 或 high。".into());
+    }
     let data_dir = state.data_dir.clone();
     let mut guard = state.inner.lock().unwrap();
     // Always floor the real DB location from the runtime, not user input.
@@ -73,7 +81,10 @@ pub fn settings_save(state: State<'_, ApiConfigState>, config: ApiConfig) -> Res
     }
     guard.chat_model = config.chat_model;
     guard.vision_model = config.vision_model;
-    guard.vision_max_tokens = config.vision_max_tokens.max(1);
+    guard.vision_context_tokens = context_tokens;
+    guard.vision_max_tokens = max_tokens;
+    guard.vision_thinking_enabled = config.vision_thinking_enabled;
+    guard.vision_reasoning_effort = config.vision_reasoning_effort;
     guard.database_location = db_location;
     let snapshot = guard.clone();
     drop(guard);
@@ -195,7 +206,8 @@ pub async fn vision_extract(
         return Err(LlmError::MissingConfig("尚未配置 API Key，请先在「设置」中填写。".into()).to_string());
     }
     let cfg = config_state.inner.lock().unwrap().clone();
-    let client = OpenAiCompatClient::new(cfg.api_base_url, cfg.api_key, cfg.vision_model);
+    let client = OpenAiCompatClient::new(cfg.api_base_url, cfg.api_key, cfg.vision_model)
+        .with_reasoning(cfg.vision_thinking_enabled, cfg.vision_reasoning_effort);
     let existing_categories = {
         let conn = db.conn.lock().unwrap();
         let items = db::list(&conn).map_err(|e| e.to_string())?;
