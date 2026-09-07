@@ -45,6 +45,8 @@ const renderAnswer = (text: string) => {
   );
 };
 
+const NO_TOPIC = '__no_topic__';
+
 // 主题/领域筛选面板的内容。横屏与桌面仍放在常驻左栏；竖屏放进左侧抽屉，
 // 两份渲染共用同一份数据与交互，不做 CSS 隐藏式的功能阉割。
 function TopicPanelBody({
@@ -87,12 +89,13 @@ function TopicPanelBody({
         <button className={mode === 'keyword' ? 'active' : ''} onClick={() => setMode('keyword')}>按关键词</button>
       </div>
       <div className="domain-list">
-        {mode === 'topic' ? topics.map(topic => {
-          const children = knowledge.filter(item => item.topic === topic);
+        {mode === 'topic' ? [NO_TOPIC, ...topics].map(topic => {
+          const noTopic = topic === NO_TOPIC;
+          const children = knowledge.filter(item => noTopic ? !item.topic : item.topic === topic);
           const open = expanded.has(topic);
           return <div className="topic-group" key={topic}>
             <button className={selectedTopic === topic ? 'active topic-toggle' : 'topic-toggle'} onClick={() => toggleTopic(topic)} aria-expanded={open}>
-              <ChevronRight className={open ? 'expanded' : ''}/>{topic}<small>{children.length}</small>
+              <ChevronRight className={open ? 'expanded' : ''}/>{noTopic ? '无主题' : topic}<small>{children.length}</small>
             </button>
             {open && <div className="topic-children">{children.map(item => <button key={item.id} onClick={() => onOpenKnowledge(item.id)}>{item.question}</button>)}</div>}
           </div>;
@@ -119,6 +122,10 @@ export function KnowledgePage() {
   const [exporting, setExporting] = useState(false);
   const [selecting, setSelecting] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [topicDialogOpen, setTopicDialogOpen] = useState(false);
+  const [newTopicName, setNewTopicName] = useState('');
+  const [topicError, setTopicError] = useState('');
+  const [creatingTopic, setCreatingTopic] = useState(false);
 
   const exportKnowledge = async (ids?: string[]) => {
     setExporting(true);
@@ -151,7 +158,7 @@ export function KnowledgePage() {
 
   const filtered = knowledge.filter(
     x =>
-      (!selectedTopic || x.topic === selectedTopic) &&
+      (!selectedTopic || (selectedTopic === NO_TOPIC ? !x.topic : x.topic === selectedTopic)) &&
       (!selectedKeyword || x.tags.includes(selectedKeyword)) &&
       [x.question, x.answer, x.topic, ...x.tags]
         .join(' ')
@@ -168,16 +175,34 @@ export function KnowledgePage() {
     setSelectedTopic('');
   };
   const createTopic = async () => {
-    const name = window.prompt('输入新主题名称');
-    if (!name?.trim()) return;
+    const name = newTopicName.trim();
+    if (!name) {
+      setTopicError('请输入主题名称。');
+      return;
+    }
+    if (topics.includes(name)) {
+      setTopicError('这个主题已经存在。');
+      return;
+    }
+    setCreatingTopic(true);
+    setTopicError('');
     try {
       await knowledgeService.createTopic(name);
       await refresh();
-      setSelectedTopic(name.trim());
+      setSelectedTopic(name);
       setSelectedKeyword('');
+      setTopicDialogOpen(false);
+      setNewTopicName('');
     } catch (error) {
-      window.alert(String(error));
+      setTopicError(String(error));
+    } finally {
+      setCreatingTopic(false);
     }
+  };
+  const openTopicDialog = () => {
+    setNewTopicName('');
+    setTopicError('');
+    setTopicDialogOpen(true);
   };
 
   return (
@@ -192,15 +217,15 @@ export function KnowledgePage() {
           onPickTopic={pickTopic}
           onPickKeyword={pickKeyword}
           onOpenKnowledge={id => nav(`/knowledge/${id}`)}
-          onCreateTopic={createTopic}
+          onCreateTopic={openTopicDialog}
         />
       </aside>
 
       <section className="knowledge-list">
         <header>
           <div>
-            <p>{selectedTopic || selectedKeyword || '全部'}</p>
-            <h2>{q ? `“${q}” 的搜索结果` : selectedTopic ? `${selectedTopic} 主题` : selectedKeyword ? `${selectedKeyword} 关键词` : '全部知识'}</h2>
+            <p>{selectedTopic === NO_TOPIC ? '无主题' : selectedTopic || selectedKeyword || '全部'}</p>
+            <h2>{q ? `“${q}” 的搜索结果` : selectedTopic ? `${selectedTopic === NO_TOPIC ? '无主题' : selectedTopic}知识` : selectedKeyword ? `${selectedKeyword} 关键词` : '全部知识'}</h2>
           </div>
           <div className="knowledge-header-actions">
             {selecting ? (
@@ -255,7 +280,7 @@ export function KnowledgePage() {
         {/* 竖屏筛选工具条：常驻左栏被 CSS 隐藏后，这里是唯一的筛选入口 */}
         <div className="knowledge-filter-bar">
           <span className="filter-current">
-            当前：{selectedTopic ? `主题 ${selectedTopic}` : selectedKeyword ? `关键词 ${selectedKeyword}` : '全部'}
+            当前：{selectedTopic ? `主题 ${selectedTopic === NO_TOPIC ? '无主题' : selectedTopic}` : selectedKeyword ? `关键词 ${selectedKeyword}` : '全部'}
             {q ? ` · 关键词“${q}”` : ''}
           </span>
           {q && (
@@ -329,9 +354,18 @@ export function KnowledgePage() {
             setFilterOpen(false);
           }}
           onOpenKnowledge={id => nav(`/knowledge/${id}`)}
-          onCreateTopic={createTopic}
+          onCreateTopic={openTopicDialog}
         />
       </Drawer>
+      {topicDialogOpen && <div className="restore-overlay" role="dialog" aria-modal="true" aria-labelledby="new-topic-title" onClick={() => !creatingTopic && setTopicDialogOpen(false)}>
+        <form className="restore-card topic-create-card" onSubmit={e => {e.preventDefault();void createTopic()}} onClick={e => e.stopPropagation()}>
+          <div className="topic-create-heading"><span><FolderOpen /></span><div><h3 id="new-topic-title">新建主题</h3><p>创建一个由你维护的知识分类。AI 只能从已有主题中推荐。</p></div></div>
+          <label htmlFor="new-topic-name">主题名称</label>
+          <Input id="new-topic-name" autoFocus maxLength={24} placeholder="例如：Redis、MySQL、计算机网络" value={newTopicName} onChange={e => {setNewTopicName(e.target.value);setTopicError('')}} aria-invalid={Boolean(topicError)} />
+          <div className="topic-create-hint"><span>{topicError || '最多 24 个字符'}</span><small>{newTopicName.trim().length} / 24</small></div>
+          <div className="restore-actions"><Button type="button" variant="ghost" disabled={creatingTopic} onClick={() => setTopicDialogOpen(false)}>取消</Button><Button type="submit" variant="primary" disabled={creatingTopic || !newTopicName.trim()}>{creatingTopic ? '创建中…' : '创建主题'}</Button></div>
+        </form>
+      </div>}
     </div>
   );
 }
