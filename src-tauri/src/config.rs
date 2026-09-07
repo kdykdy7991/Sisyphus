@@ -23,6 +23,7 @@ pub struct ApiConfig {
     pub api_key: String,
     pub chat_model: String,
     pub vision_model: String,
+    pub vision_max_tokens: u32,
     pub database_location: String,
 }
 
@@ -33,6 +34,7 @@ impl Default for ApiConfig {
             api_key: String::new(),
             chat_model: "gpt-5".to_string(),
             vision_model: "gpt-5".to_string(),
+            vision_max_tokens: 32 * 1024,
             database_location: String::new(),
         }
     }
@@ -257,6 +259,7 @@ mod tests {
             api_key: "secret-key".to_string(),
             chat_model: "cm".to_string(),
             vision_model: "vm".to_string(),
+            vision_max_tokens: 16 * 1024,
             database_location: String::new(),
         };
         save(&dir, &cfg).unwrap();
@@ -264,6 +267,7 @@ mod tests {
         assert_eq!(loaded.api_base_url, "https://example.com/v1");
         assert_eq!(loaded.api_key, "secret-key");
         assert_eq!(loaded.vision_model, "vm");
+        assert_eq!(loaded.vision_max_tokens, 16 * 1024);
         assert_eq!(loaded.database_location, "/db/location.db");
     }
 
@@ -272,6 +276,7 @@ mod tests {
         let dir = tmp_dir("missing");
         let loaded = load(&dir, "/db/location.db");
         assert_eq!(loaded.api_base_url, "https://api.openai.com/v1");
+        assert_eq!(loaded.vision_max_tokens, 32 * 1024);
         assert_eq!(loaded.database_location, "/db/location.db");
     }
 

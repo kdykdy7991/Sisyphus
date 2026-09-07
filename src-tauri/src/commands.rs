@@ -73,6 +73,7 @@ pub fn settings_save(state: State<'_, ApiConfigState>, config: ApiConfig) -> Res
     }
     guard.chat_model = config.chat_model;
     guard.vision_model = config.vision_model;
+    guard.vision_max_tokens = config.vision_max_tokens.max(1);
     guard.database_location = db_location;
     let snapshot = guard.clone();
     drop(guard);
@@ -210,7 +211,13 @@ pub async fn vision_extract(
         }
         categories.into_iter().collect::<Vec<_>>()
     };
-    vision::extract_from_image(&client, &image_data_url, &source, &existing_categories)
+    vision::extract_from_image(
+        &client,
+        &image_data_url,
+        &source,
+        cfg.vision_max_tokens,
+        &existing_categories,
+    )
         .await
         .map_err(|e| {
             log::append_failure(&log_state, "vision_extract", &e);

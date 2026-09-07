@@ -481,6 +481,7 @@ export function SettingsPage() {
               <label>API Key<div className="password"><Input type={show ? 'text' : 'password'} value={s.apiKey} placeholder="sk-••••••••••••" onChange={(e) => set('apiKey', e.target.value)} /><button onClick={() => setShow(!show)}>{show ? <EyeOff /> : <Eye />}</button></div></label>
               <label>Chat Model<Input value={s.chatModel} onChange={(e) => set('chatModel', e.target.value)} /></label>
               <label>Vision Model<Input value={s.visionModel} onChange={(e) => set('visionModel', e.target.value)} /></label>
+              <label>Vision 最大输出 Token<Input type="number" min={1} step={1024} value={s.visionMaxTokens} onChange={e => setS({...s, visionMaxTokens: Math.max(1, Number(e.target.value) || 1)})} /><small className="field-hint">32K = 32768；具体上限取决于模型服务。</small></label>
             </div>
             {msg && <p className={state === 'fail' ? 'conn-msg err' : 'conn-msg ok'}>{msg}</p>}
             <div className="restore-actions"><Button onClick={test}>{state === 'testing' ? <><LoaderCircle className="spin" /> 测试中</> : state === 'ok' ? <><Check /> 连接正常</> : state === 'fail' ? '测试失败' : '测试连接'}</Button><Button variant="primary" disabled={!profileName.trim()} onClick={()=>void saveProfile()}>保存配置</Button></div>

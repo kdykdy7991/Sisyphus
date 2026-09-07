@@ -459,6 +459,7 @@ pub async fn extract_from_image(
     client: &OpenAiCompatClient,
     image_data_url: &str,
     source: &str,
+    max_tokens: u32,
     existing_categories: &[(String, String)],
 ) -> Result<Vec<KnowledgePayload>, crate::llm::LlmError> {
     parse_data_url(image_data_url)?; // fail fast on unsupported/corrupt image
@@ -466,7 +467,7 @@ pub async fn extract_from_image(
         client,
         vision_messages(image_data_url, existing_categories),
         source,
-        32 * 1024,
+        max_tokens,
         existing_categories,
     )
     .await
