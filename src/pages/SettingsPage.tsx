@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useApp } from '../AppContext';
 import { backupService, knowledgeService, logsService, settingsService, webdavService } from '../services';
 import type { BackupInspect, LlmProfiles, Settings, WebDavConfig } from '../types';
-import { AlertCircle, Check, Database, Download, Eye, EyeOff, FileText, FolderOpen, LoaderCircle, RotateCcw, Trash2 } from '../components/Icons';
+import { AlertCircle, Check, Database, Download, Eye, EyeOff, FileText, FolderOpen, LoaderCircle, RotateCcw, Settings as SettingsIcon, Trash2, X } from '../components/Icons';
 import { Button, Input } from '../components/UI';
 
 type Flash = { kind: 'ok' | 'err'; text: string } | null;
@@ -27,6 +27,7 @@ export function SettingsPage() {
   const [flash, setFlash] = useState<Flash>(null);
   const [profiles, setProfiles] = useState<LlmProfiles>();
   const [newProfileName, setNewProfileName] = useState('');
+  const [profileManagerOpen, setProfileManagerOpen] = useState(false);
 
   const [busy, setBusy] = useState<'backup' | 'restore' | null>(null);
   const [restore, setRestore] = useState<RestoreDialog>({ kind: 'idle' });
@@ -82,8 +83,26 @@ export function SettingsPage() {
     setTimeout(() => setState(''), 1500);
   };
   const switchProfile = async (id: string) => { setS(await settingsService.switchProfile(id)); setProfiles(await settingsService.profiles()); setState(''); setMsg(''); };
-  const createProfile = async () => { if(!newProfileName.trim())return;const id=await settingsService.createProfile(newProfileName.trim());setNewProfileName('');setS(await settingsService.switchProfile(id));setProfiles(await settingsService.profiles()); };
-  const deleteProfile = async () => { if(!profiles||profiles.profiles.length<=1)return;const target=profiles.profiles.find(p=>p.id===profiles.activeId)!;if(window.confirm(`删除配置“${target.name}”？`)){await settingsService.deleteProfile(target.id);setProfiles(await settingsService.profiles());setS(await settingsService.get());} };
+  const createProfile = async () => {
+    if (!newProfileName.trim()) return;
+    await settingsService.createProfile(newProfileName.trim());
+    setNewProfileName('');
+    setProfiles(await settingsService.profiles());
+  };
+  const deleteProfile = async (id: string, name: string) => {
+    if (!profiles || profiles.profiles.length <= 1 || id === profiles.activeId) return;
+    if (window.confirm(`删除配置“${name}”？`)) {
+      await settingsService.deleteProfile(id);
+      setProfiles(await settingsService.profiles());
+    }
+  };
+  const saveProfile = async () => {
+    await settingsService.save(s);
+    setProfiles(await settingsService.profiles());
+    setState('saved');
+    setTimeout(() => setState(''), 1500);
+    setProfileManagerOpen(false);
+  };
 
   // Best-effort: ask the OS to open the log directory. If it fails (rare,
   // usually a sandboxed env) we still have the path string rendered below
@@ -265,52 +284,7 @@ export function SettingsPage() {
             <h2>模型</h2>
             <p>配置用于图片提取的 OpenAI-compatible 模型服务（Base URL / Key / Vision Model）。</p>
           </div>
-          {profiles && <div className="profile-toolbar"><label>当前配置<select className="input" value={profiles.activeId} onChange={e=>void switchProfile(e.target.value)}>{profiles.profiles.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label><label>新增配置<Input value={newProfileName} maxLength={30} placeholder="配置名称" onChange={e=>setNewProfileName(e.target.value)}/></label><Button onClick={()=>void createProfile()} disabled={!newProfileName.trim()}>新增并切换</Button><Button variant="ghost" onClick={()=>void deleteProfile()} disabled={profiles.profiles.length<=1}>删除其他配置</Button></div>}
-          <div className="form-grid">
-            <label>
-              API Base URL
-              <Input value={s.apiBaseUrl} onChange={(e) => set('apiBaseUrl', e.target.value)} />
-            </label>
-            <label>
-              API Key
-              <div className="password">
-                <Input
-                  type={show ? 'text' : 'password'}
-                  value={s.apiKey}
-                  placeholder="sk-••••••••••••"
-                  onChange={(e) => set('apiKey', e.target.value)}
-                />
-                <button onClick={() => setShow(!show)}>{show ? <EyeOff /> : <Eye />}</button>
-              </div>
-            </label>
-            <label>
-              Chat Model
-              <Input value={s.chatModel} onChange={(e) => set('chatModel', e.target.value)} />
-            </label>
-            <label>
-              Vision Model
-              <Input value={s.visionModel} onChange={(e) => set('visionModel', e.target.value)} />
-            </label>
-            <div />
-            <div className="test-cell">
-              <Button onClick={test}>
-                {state === 'testing' ? (
-                  <>
-                    <LoaderCircle className="spin" /> 测试中
-                  </>
-                ) : state === 'ok' ? (
-                  <>
-                    <Check /> 连接正常
-                  </>
-                ) : state === 'fail' ? (
-                  <>测试失败</>
-                ) : (
-                  'Test Connection'
-                )}
-              </Button>
-              {msg && <p className={state === 'fail' ? 'conn-msg err' : 'conn-msg ok'}>{msg}</p>}
-            </div>
-          </div>
+          {profiles && <div className="model-switcher"><label>当前配置<select className="input" value={profiles.activeId} onChange={e=>void switchProfile(e.target.value)}>{profiles.profiles.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label><Button onClick={()=>setProfileManagerOpen(true)}><SettingsIcon /> 管理配置</Button></div>}
         </section>
 
         <section>
@@ -472,6 +446,32 @@ export function SettingsPage() {
           onCancel={() => setConfirmClear(false)}
           onConfirm={doClear}
         />
+      )}
+
+      {profileManagerOpen && profiles && (
+        <div className="restore-overlay" role="dialog" aria-modal="true" aria-labelledby="profile-manager-title" onClick={() => setProfileManagerOpen(false)}>
+          <div className="restore-card profile-manager" onClick={e => e.stopPropagation()}>
+            <div className="profile-manager-head">
+              <div><h3 id="profile-manager-title">管理模型配置</h3><p>编辑当前配置，或管理已保存的配置。</p></div>
+              <button className="icon-button" aria-label="关闭" onClick={() => setProfileManagerOpen(false)}><X /></button>
+            </div>
+            <div className="profile-list">
+              {profiles.profiles.map(profile => <div key={profile.id} className={profile.id === profiles.activeId ? 'active' : ''}>
+                <button onClick={() => void switchProfile(profile.id)}><span>{profile.name}</span>{profile.id === profiles.activeId && <small>当前</small>}</button>
+                <button aria-label={`删除 ${profile.name}`} title={profile.id === profiles.activeId ? '当前配置不能删除' : `删除 ${profile.name}`} disabled={profile.id === profiles.activeId || profiles.profiles.length <= 1} onClick={() => void deleteProfile(profile.id, profile.name)}><Trash2 /></button>
+              </div>)}
+            </div>
+            <div className="profile-create"><Input value={newProfileName} maxLength={30} placeholder="新配置名称" onChange={e=>setNewProfileName(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')void createProfile();}}/><Button onClick={()=>void createProfile()} disabled={!newProfileName.trim()}>新增配置</Button></div>
+            <div className="profile-form">
+              <label>API Base URL<Input value={s.apiBaseUrl} onChange={(e) => set('apiBaseUrl', e.target.value)} /></label>
+              <label>API Key<div className="password"><Input type={show ? 'text' : 'password'} value={s.apiKey} placeholder="sk-••••••••••••" onChange={(e) => set('apiKey', e.target.value)} /><button onClick={() => setShow(!show)}>{show ? <EyeOff /> : <Eye />}</button></div></label>
+              <label>Chat Model<Input value={s.chatModel} onChange={(e) => set('chatModel', e.target.value)} /></label>
+              <label>Vision Model<Input value={s.visionModel} onChange={(e) => set('visionModel', e.target.value)} /></label>
+            </div>
+            {msg && <p className={state === 'fail' ? 'conn-msg err' : 'conn-msg ok'}>{msg}</p>}
+            <div className="restore-actions"><Button onClick={test}>{state === 'testing' ? <><LoaderCircle className="spin" /> 测试中</> : state === 'ok' ? <><Check /> 连接正常</> : state === 'fail' ? '测试失败' : '测试连接'}</Button><Button variant="primary" onClick={()=>void saveProfile()}>保存配置</Button></div>
+          </div>
+        </div>
       )}
     </div>
   );

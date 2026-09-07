@@ -356,11 +356,9 @@ h1,h2,h3,p{margin-top:0}
 
 /* settings */.settings-page{max-width:1120px}
 .settings-content{display:grid;grid-template-columns:minmax(600px,1fr) 250px;gap:40px}
-.profile-toolbar{grid-column:2;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px;align-items:end;margin:0 0 22px;padding:16px;background:#f6f6f5;border:1px solid var(--line);border-radius:9px}
-.profile-toolbar label{font-size:12px;color:#666a70}.profile-toolbar .input{margin-top:6px;background:#fff}
-.profile-toolbar .btn{justify-self:start}
 .settings-content>section{grid-column:1;border-top:1px solid var(--line);padding:26px 0;display:grid;grid-template-columns:180px 1fr;gap:28px}
-.profile-toolbar+.form-grid{grid-column:2}
+.model-switcher{grid-column:2;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:end}
+.model-switcher label{font-size:12px;color:#666a70}.model-switcher .input{margin-top:6px;background:#fff}
 .settings-heading h2{font:600 20px var(--serif);margin-bottom:5px}
 .settings-heading p{color:var(--muted);font-size:12px;line-height:1.6}
 .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:5px 14px}
@@ -446,6 +444,26 @@ h1,h2,h3,p{margin-top:0}
 .restore-meta dd small.muted{color:var(--muted);font-size:11px}
 
 .restore-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:6px}
+
+.profile-manager{width:min(680px,92vw);padding:0;overflow:hidden}
+.profile-manager-head{display:flex;align-items:flex-start;justify-content:space-between;padding:22px 24px 16px;border-bottom:1px solid var(--line)}
+.profile-manager-head h3{margin:0 0 4px}.profile-manager-head p{margin:0;color:var(--muted);font-size:12px}
+.icon-button{display:grid;place-items:center;width:30px;height:30px;border-radius:6px;color:var(--muted)}
+.icon-button:hover{background:#f2f2f1;color:var(--ink)}
+.profile-list{display:flex;gap:7px;overflow-x:auto;padding:14px 24px;border-bottom:1px solid var(--line)}
+.profile-list>div{display:flex;flex:0 0 auto;border:1px solid var(--line);border-radius:7px;overflow:hidden;background:#fff}
+.profile-list>div.active{border-color:#242424;background:#f4f4f3}
+.profile-list>div>button:first-child{display:flex;align-items:center;gap:7px;padding:8px 10px;font-size:13px}
+.profile-list>div>button:last-child{display:grid;place-items:center;width:30px;border-left:1px solid var(--line);color:#92969b}
+.profile-list>div>button:last-child:not(:disabled):hover{background:#f7eded;color:#9d3535}
+.profile-list>div>button:last-child:disabled{opacity:.32;cursor:not-allowed}
+.profile-list small{font-size:10px;color:var(--muted)}
+.profile-create{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;padding:14px 24px;background:#f7f7f6}
+.profile-create .input{margin:0;background:#fff}
+.profile-form{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:5px 14px;padding:18px 24px}
+.profile-form label{min-width:0}
+.profile-manager>.conn-msg{margin:0 24px 14px;padding:9px 12px;border-radius:6px;font-size:12px}
+.profile-manager>.restore-actions{padding:14px 24px;margin:0;border-top:1px solid var(--line)}
 
 
 /* Generic confirm dialog (reuses .restore-overlay + .restore-card). Tighter
@@ -787,9 +805,7 @@ button,a{transition:background .14s ease,color .14s ease,border-color .14s ease}
 
   .settings-content>section{grid-template-columns:minmax(0,1fr) !important;gap:12px;padding:18px 0}
 
-  .profile-toolbar,.profile-toolbar+.form-grid{grid-column:1/-1}
-
-  .profile-toolbar{grid-template-columns:minmax(0,1fr) !important}
+  .model-switcher{grid-column:1/-1}
 
   .form-grid{grid-template-columns:minmax(0,1fr) !important;gap:0}
 
@@ -804,6 +820,16 @@ button,a{transition:background .14s ease,color .14s ease,border-color .14s ease}
   .data-actions{grid-column:1/-1;grid-template-columns:minmax(0,1fr) !important}
 
   .data-actions button{padding:14px 12px;min-height:64px}
+
+  .profile-manager{width:calc(100vw - 24px);max-height:calc(100vh - 24px)}
+
+  .profile-manager-head,.profile-list{padding-left:18px;padding-right:18px}
+
+  .profile-create{grid-template-columns:minmax(0,1fr);padding:12px 18px}
+
+  .profile-form{grid-template-columns:minmax(0,1fr);padding:16px 18px}
+
+  .profile-manager>.restore-actions{padding:12px 18px}
 
   .review-actions{position:sticky;bottom:0;background:#fff;border-top:1px solid var(--line);padding:10px var(--page-pad-x) calc(10px + var(--safe-bottom));margin:18px calc(var(--page-pad-x) * -1) 0;display:grid;grid-template-columns:1fr 1.4fr;gap:10px;z-index:5}
 
