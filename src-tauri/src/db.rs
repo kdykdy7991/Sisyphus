@@ -333,6 +333,25 @@ pub fn list(conn: &Connection) -> rusqlite::Result<Vec<KnowledgePayload>> {
     rows.collect()
 }
 
+/// User-maintained Topic names. Standalone topics are included even before a
+/// Knowledge item is assigned to them; empty strings are never exposed.
+pub fn list_topics(conn: &Connection) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT topic FROM topics WHERE trim(topic) <> '' ORDER BY topic COLLATE NOCASE",
+    )?;
+    let topics = stmt.query_map([], |row| row.get(0))?.collect();
+    topics
+}
+
+pub fn create_topic(conn: &Connection, topic: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO topics(domain, topic) VALUES ('未分类', ?1)
+         ON CONFLICT(domain, topic) DO NOTHING",
+        params![topic],
+    )?;
+    Ok(())
+}
+
 /// Fetch one item, recording its `last_read_at` as a side effect (detail view).
 /// Soft-deleted items are returned as `None` and the side-effect update is
 /// skipped — opening a deleted row must not silently extend its "read" history.
@@ -729,6 +748,11 @@ fn insert_row(conn: &Connection, item: &KnowledgePayload, favorite: i64, sync_id
 
 /// Normalize the (domain, topic) pair into `topics`.
 fn sync_topics(conn: &Connection, domain: &str, topic: &str) -> rusqlite::Result<()> {
+    // Empty string is the schema-compatible representation of “未分类”. It is
+    // a Knowledge state, not a user Topic, so never add it to the Topic table.
+    if topic.trim().is_empty() {
+        return Ok(());
+    }
     conn.execute(
         "INSERT INTO topics(domain, topic) VALUES (?1, ?2)
          ON CONFLICT(domain, topic) DO NOTHING",
@@ -1013,6 +1037,38 @@ mod tests {
         assert_eq!(saved.question, "Redis 集群横向扩容怎么做？");
         // Fresh DB + 1 insert = exactly 1 row.
         assert_eq!(list(&conn).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn standalone_topic_can_be_created_and_listed() {
+        let path = tmp_path("standalone-topic");
+        let (conn, _) = open_inits(&path);
+        create_topic(&conn, "Kubernetes").unwrap();
+        create_topic(&conn, "Kubernetes").unwrap();
+        assert_eq!(list_topics(&conn).unwrap(), vec!["Kubernetes"]);
+        assert!(list(&conn).unwrap().is_empty(), "创建 Topic 不应创建虚假 Knowledge");
+    }
+
+    #[test]
+    fn uncategorized_item_saves_searches_and_does_not_create_a_topic() {
+        let path = tmp_path("uncategorized");
+        let (conn, _) = open_inits(&path);
+        let mut item = payload("Kubernetes 调度的基本过程是什么？");
+        item.domain = "未分类".to_string();
+        item.topic = String::new();
+
+        let saved = save(&conn, &item).unwrap();
+        assert_eq!(saved.topic, "");
+        assert_eq!(saved.domain, "未分类");
+        assert_eq!(get(&conn, &saved.id).unwrap().unwrap().topic, "");
+        assert!(search(&conn, "Kubernetes", true)
+            .unwrap()
+            .iter()
+            .any(|found| found.id == saved.id));
+        let topics: i64 = conn
+            .query_row("SELECT count(*) FROM topics", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(topics, 0, "未分类不应成为一个 Topic");
     }
 
     #[test]

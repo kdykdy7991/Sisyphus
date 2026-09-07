@@ -1695,8 +1695,8 @@ mod tests {
                 sync_id: test_sync_id("roundtrip-1"),
                 question: "Q1".to_string(),
                 answer: "A1".to_string(),
-                domain: "D".to_string(),
-                topic: "T".to_string(),
+                domain: "未分类".to_string(),
+                topic: String::new(),
                 tags: vec!["t1".into(), "t2".into()],
                 follow_ups: vec!["FU1".into()],
                 related_ids: vec!["rel-1".into()],
@@ -1741,8 +1741,8 @@ mod tests {
         assert_eq!(row.sync_id, test_sync_id("roundtrip-1"));
         assert_eq!(row.question, "Q1");
         assert_eq!(row.answer, "A1");
-        assert_eq!(row.domain, "D");
-        assert_eq!(row.topic, "T");
+        assert_eq!(row.domain, "未分类");
+        assert_eq!(row.topic, "");
         assert_eq!(row.tags, vec!["t1".to_string(), "t2".to_string()]);
         assert_eq!(row.follow_ups, vec!["FU1".to_string()]);
         assert_eq!(row.related_ids, vec!["rel-1".to_string()]);

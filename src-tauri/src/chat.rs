@@ -27,9 +27,9 @@ use crate::llm::{LlmError, ModelMessage, ToolCall};
 
 pub type BoxFuture<T> = Pin<Box<dyn Future<Output = T> + Send + 'static>>;
 
-/// Hard cap on model round-trips to guarantee termination (one tool may only
-/// be re-invoked a bounded number of times).
-pub const MAX_TOOL_ROUNDS: usize = 3;
+/// Hard cap on tool-enabled model round-trips. After this budget is exhausted,
+/// the loop makes one final model request without tools to produce an answer.
+pub const MAX_TOOL_ROUNDS: usize = 5;
 /// How many recent user/assistant messages are sent as conversation history
 /// (in-memory only; nothing is persisted).
 pub const MAX_HISTORY: usize = 8;
@@ -205,13 +205,13 @@ pub async fn run_chat_loop<F, T>(
     mut run_tool: T,
 ) -> Result<(String, Vec<KnowledgePayload>), String>
 where
-    F: FnMut(Vec<Value>) -> BoxFuture<Result<ModelMessage, LlmError>>,
+    F: FnMut(Vec<Value>, bool) -> BoxFuture<Result<ModelMessage, LlmError>>,
     T: FnMut(&ToolCall) -> Result<Vec<KnowledgePayload>, String>,
 {
     let mut pool: Vec<KnowledgePayload> = Vec::new();
 
     for _ in 0..max_rounds {
-        let resp = call(messages.clone()).await.map_err(|e| e.to_string())?;
+        let resp = call(messages.clone(), true).await.map_err(|e| e.to_string())?;
 
         if resp.tool_calls.is_empty() {
             let content = resp
@@ -253,7 +253,22 @@ where
         }
     }
 
-    Err(format!("工具调用次数超过上限（{max_rounds} 轮），已停止。"))
+    // The tool budget is exhausted, but the last successful tool result still
+    // deserves a chance to become a user-facing answer. Make one final model
+    // request without exposing tools so it must answer from the accumulated
+    // conversation and retrieval results.
+    let resp = call(messages, false).await.map_err(|e| e.to_string())?;
+    if !resp.tool_calls.is_empty() {
+        return Err(format!("工具调用次数超过上限（{max_rounds} 轮），模型未能生成最终回答。"));
+    }
+    let content = resp
+        .content
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "模型返回了空内容。".to_string())?
+        .to_string();
+    Ok((content, pool))
 }
 
 #[cfg(test)]
@@ -353,7 +368,7 @@ mod tests {
 
     #[tokio::test]
     async fn no_tool_call_returns_final_with_empty_pool() {
-        let call = |msgs: Vec<Value>| -> BoxFuture<Result<ModelMessage, LlmError>> { Box::pin(async move { assert!(!msgs.is_empty()); Ok(plain("你好！")) }) };
+        let call = |msgs: Vec<Value>, _allow_tools: bool| -> BoxFuture<Result<ModelMessage, LlmError>> { Box::pin(async move { assert!(!msgs.is_empty()); Ok(plain("你好！")) }) };
         let run = |_tc: &ToolCall| -> Result<Vec<KnowledgePayload>, String> { unreachable!() };
         let (answer, pool) = run_chat_loop(vec![serde_json::json!({"role":"user","content":"hi"})], 3, call, run).await.unwrap();
         assert_eq!(answer, "你好！");
@@ -364,7 +379,7 @@ mod tests {
     async fn tool_then_final_produces_pool_and_replays_messages() {
         let seen: Rc<RefCell<Vec<Vec<Value>>>> = Rc::new(RefCell::new(Vec::new()));
         let seen2 = seen.clone();
-        let call = move |msgs: Vec<Value>| -> BoxFuture<Result<ModelMessage, LlmError>> {
+        let call = move |msgs: Vec<Value>, _allow_tools: bool| -> BoxFuture<Result<ModelMessage, LlmError>> {
             seen2.borrow_mut().push(msgs.clone());
             let msg = if has_tool_role(&msgs) { plain("BERT 是双向编码器。[1]") } else { called() };
             Box::pin(async move { Ok(msg) })
@@ -387,7 +402,7 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_tool_aborts_loop() {
-        let call = |_msgs: Vec<Value>| -> BoxFuture<Result<ModelMessage, LlmError>> {
+        let call = |_msgs: Vec<Value>, _allow_tools: bool| -> BoxFuture<Result<ModelMessage, LlmError>> {
             Box::pin(async move {
                 Ok(ModelMessage {
                     content: None,
@@ -406,7 +421,7 @@ mod tests {
 
     #[tokio::test]
     async fn empty_tool_result_then_final_is_ok() {
-        let call = move |msgs: Vec<Value>| -> BoxFuture<Result<ModelMessage, LlmError>> {
+        let call = move |msgs: Vec<Value>, _allow_tools: bool| -> BoxFuture<Result<ModelMessage, LlmError>> {
             let msg = if has_tool_role(&msgs) { plain("本地知识库没有检索到相关内容。") } else { called() };
             Box::pin(async move { Ok(msg) })
         };
@@ -418,9 +433,33 @@ mod tests {
 
     #[tokio::test]
     async fn enforces_max_tool_rounds() {
-        let call = |_msgs: Vec<Value>| -> BoxFuture<Result<ModelMessage, LlmError>> { Box::pin(async move { Ok(called()) }) }; // always asks for tool
+        let call = |_msgs: Vec<Value>, _allow_tools: bool| -> BoxFuture<Result<ModelMessage, LlmError>> { Box::pin(async move { Ok(called()) }) }; // always asks for tool
         let run = |_tc: &ToolCall| -> Result<Vec<KnowledgePayload>, String> { Ok(vec![]) };
         let err = run_chat_loop(vec![serde_json::json!({"role":"user","content":"hi"})], 3, call, run).await.unwrap_err();
         assert!(err.contains("上限"), "err: {err}");
+    }
+
+    #[tokio::test]
+    async fn tool_limit_gets_one_tool_free_final_round() {
+        let flags: Rc<RefCell<Vec<bool>>> = Rc::new(RefCell::new(Vec::new()));
+        let flags2 = flags.clone();
+        let call = move |_msgs: Vec<Value>, allow_tools: bool| -> BoxFuture<Result<ModelMessage, LlmError>> {
+            flags2.borrow_mut().push(allow_tools);
+            Box::pin(async move {
+                Ok(if allow_tools { called() } else { plain("基于已有检索结果作答。") })
+            })
+        };
+        let run = |_tc: &ToolCall| -> Result<Vec<KnowledgePayload>, String> { Ok(vec![]) };
+        let (answer, _) = run_chat_loop(
+            vec![serde_json::json!({"role":"user","content":"hi"})],
+            5,
+            call,
+            run,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(answer, "基于已有检索结果作答。");
+        assert_eq!(&*flags.borrow(), &[true, true, true, true, true, false]);
     }
 }

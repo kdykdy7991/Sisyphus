@@ -102,6 +102,7 @@ pub async fn settings_test_connection(
 /// upstream response body, not just the user-facing summary.
 #[tauri::command]
 pub async fn vision_extract(
+    db: State<'_, Db>,
     config_state: State<'_, ApiConfigState>,
     log_state: State<'_, LogState>,
     image_data_url: String,
@@ -112,7 +113,22 @@ pub async fn vision_extract(
     }
     let cfg = config_state.inner.lock().unwrap().clone();
     let client = OpenAiCompatClient::new(cfg.api_base_url, cfg.api_key, cfg.vision_model);
-    vision::extract_from_image(&client, &image_data_url, &source)
+    let existing_categories = {
+        let conn = db.conn.lock().unwrap();
+        let items = db::list(&conn).map_err(|e| e.to_string())?;
+        let mut categories = items
+            .into_iter()
+            .filter(|item| !item.topic.trim().is_empty() && item.topic.chars().count() <= 24)
+            .map(|item| (item.domain, item.topic))
+            .collect::<std::collections::BTreeSet<_>>();
+        for topic in db::list_topics(&conn).map_err(|e| e.to_string())? {
+            if !categories.iter().any(|(_, existing)| existing == &topic) {
+                categories.insert(("未分类".to_string(), topic));
+            }
+        }
+        categories.into_iter().collect::<Vec<_>>()
+    };
+    vision::extract_from_image(&client, &image_data_url, &source, &existing_categories)
         .await
         .map_err(|e| {
             log::append_failure(&log_state, "vision_extract", &e);
@@ -274,10 +290,12 @@ pub async fn knowledge_chat(
             .map_err(|e| e.to_string())
     };
     // One model round-trip with the tools array attached.
-    let mut call = move |msgs: Vec<serde_json::Value>| -> chat::BoxFuture<Result<ModelMessage, LlmError>> {
+    let mut call = move |msgs: Vec<serde_json::Value>, allow_tools: bool| -> chat::BoxFuture<Result<ModelMessage, LlmError>> {
         let c = model.clone();
         let t = tools_for_call.clone();
-        Box::pin(async move { c.chat_with_tools(&msgs, Some(&t)).await })
+        Box::pin(async move {
+            c.chat_with_tools(&msgs, allow_tools.then_some(&t)).await
+        })
     };
 
     let (answer, pool) = chat::run_chat_loop(base, chat::MAX_TOOL_ROUNDS, &mut call, &mut run_tool)
@@ -318,10 +336,84 @@ pub fn knowledge_list(state: State<'_, Db>) -> Result<Vec<KnowledgePayload>, Str
     db::list(&conn).map_err(|e| e.to_string())
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeExportSummary {
+    path: String,
+    item_count: usize,
+}
+
+fn knowledge_markdown(items: &[KnowledgePayload]) -> String {
+    let mut out = format!("# Interview Kit 知识库\n\n共 {} 条知识。\n", items.len());
+    for (index, item) in items.iter().enumerate() {
+        let question = item.question.split_whitespace().collect::<Vec<_>>().join(" ");
+        out.push_str(&format!("\n---\n\n## {}. {}\n\n", index + 1, question));
+        out.push_str(&format!("**领域 / 主题：** {} / {}\n\n", item.domain, item.topic));
+        if !item.tags.is_empty() {
+            out.push_str(&format!("**标签：** {}\n\n", item.tags.join("、")));
+        }
+        out.push_str("### 答案\n\n");
+        out.push_str(item.answer.trim());
+        out.push('\n');
+        if !item.follow_ups.is_empty() {
+            out.push_str("\n### 延伸问题\n\n");
+            for follow_up in &item.follow_ups {
+                out.push_str(&format!("- {}\n", follow_up.trim()));
+            }
+        }
+    }
+    out
+}
+
+#[tauri::command]
+pub fn knowledge_export_markdown(
+    state: State<'_, Db>,
+    destination_path: String,
+    ids: Option<Vec<String>>,
+) -> Result<KnowledgeExportSummary, String> {
+    let mut items = {
+        let conn = state.conn.lock().unwrap();
+        db::list(&conn).map_err(|e| e.to_string())?
+    };
+    if let Some(ids) = ids {
+        let selected: std::collections::HashSet<&str> = ids.iter().map(String::as_str).collect();
+        items.retain(|item| selected.contains(item.id.as_str()));
+        if items.is_empty() {
+            return Err("没有可导出的已选知识。".to_string());
+        }
+    }
+    let document = knowledge_markdown(&items);
+    std::fs::write(&destination_path, document.as_bytes())
+        .map_err(|e| format!("写入导出文档失败：{e}"))?;
+    Ok(KnowledgeExportSummary {
+        path: destination_path,
+        item_count: items.len(),
+    })
+}
+
 #[tauri::command]
 pub fn knowledge_get(state: State<'_, Db>, id: String) -> Result<Option<KnowledgePayload>, String> {
     let conn = state.conn.lock().unwrap();
     db::get(&conn, &id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn topic_list(state: State<'_, Db>) -> Result<Vec<String>, String> {
+    let conn = state.conn.lock().unwrap();
+    db::list_topics(&conn).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn topic_create(state: State<'_, Db>, name: String) -> Result<(), String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("主题名称不能为空。".to_string());
+    }
+    if name.chars().count() > 24 || name.contains(['\n', '\r']) {
+        return Err("主题名称不能超过 24 个字符或包含换行。".to_string());
+    }
+    let conn = state.conn.lock().unwrap();
+    db::create_topic(&conn, name).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

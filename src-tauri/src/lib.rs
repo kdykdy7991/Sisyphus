@@ -54,7 +54,10 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::knowledge_list,
+            commands::knowledge_export_markdown,
             commands::knowledge_get,
+            commands::topic_list,
+            commands::topic_create,
             commands::knowledge_search,
             commands::knowledge_save,
             commands::knowledge_recent,
