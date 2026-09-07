@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useApp } from '../AppContext';
 import { backupService, knowledgeService, logsService, settingsService, webdavService } from '../services';
-import type { BackupInspect, Settings, WebDavConfig } from '../types';
+import type { BackupInspect, LlmProfiles, Settings, WebDavConfig } from '../types';
 import { AlertCircle, Check, Database, Download, Eye, EyeOff, FileText, FolderOpen, LoaderCircle, RotateCcw, Trash2 } from '../components/Icons';
 import { Button, Input } from '../components/UI';
 
@@ -25,6 +25,8 @@ export function SettingsPage() {
   const [state, setState] = useState('');
   const [msg, setMsg] = useState('');
   const [flash, setFlash] = useState<Flash>(null);
+  const [profiles, setProfiles] = useState<LlmProfiles>();
+  const [newProfileName, setNewProfileName] = useState('');
 
   const [busy, setBusy] = useState<'backup' | 'restore' | null>(null);
   const [restore, setRestore] = useState<RestoreDialog>({ kind: 'idle' });
@@ -50,6 +52,7 @@ export function SettingsPage() {
 
   useEffect(() => {
     settingsService.get().then(setS);
+    settingsService.profiles().then(setProfiles);
     webdavService.getConfig().then(setWd);
   }, []);
 
@@ -78,6 +81,9 @@ export function SettingsPage() {
     setState('saved');
     setTimeout(() => setState(''), 1500);
   };
+  const switchProfile = async (id: string) => { setS(await settingsService.switchProfile(id)); setProfiles(await settingsService.profiles()); setState(''); setMsg(''); };
+  const createProfile = async () => { if(!newProfileName.trim())return;const id=await settingsService.createProfile(newProfileName.trim());setNewProfileName('');setS(await settingsService.switchProfile(id));setProfiles(await settingsService.profiles()); };
+  const deleteProfile = async () => { if(!profiles||profiles.profiles.length<=1)return;const target=profiles.profiles.find(p=>p.id===profiles.activeId)!;if(window.confirm(`删除配置“${target.name}”？`)){await settingsService.deleteProfile(target.id);setProfiles(await settingsService.profiles());setS(await settingsService.get());} };
 
   // Best-effort: ask the OS to open the log directory. If it fails (rare,
   // usually a sandboxed env) we still have the path string rendered below
@@ -259,6 +265,7 @@ export function SettingsPage() {
             <h2>模型</h2>
             <p>配置用于图片提取的 OpenAI-compatible 模型服务（Base URL / Key / Vision Model）。</p>
           </div>
+          {profiles && <div className="profile-toolbar"><label>当前配置<select className="input" value={profiles.activeId} onChange={e=>void switchProfile(e.target.value)}>{profiles.profiles.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label><label>新增配置<Input value={newProfileName} maxLength={30} placeholder="配置名称" onChange={e=>setNewProfileName(e.target.value)}/></label><Button onClick={()=>void createProfile()} disabled={!newProfileName.trim()}>新增并切换</Button><Button variant="ghost" onClick={()=>void deleteProfile()} disabled={profiles.profiles.length<=1}>删除其他配置</Button></div>}
           <div className="form-grid">
             <label>
               API Base URL

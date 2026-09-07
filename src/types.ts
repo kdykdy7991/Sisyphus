@@ -7,6 +7,8 @@ export type ChatMessage={id:string;role:'user'|'assistant';content:string;citati
 export type ChatCitation={knowledgeId:string;question:string};
 export type ChatResult={answer:string;citations:ChatCitation[]};
 export type Settings={apiBaseUrl:string;apiKey:string;chatModel:string;visionModel:string;databaseLocation:string};
+export type LlmProfile={id:string;name:string;config:Settings};
+export type LlmProfiles={activeId:string;profiles:LlmProfile[]};
 export type ConnectionResult={ok:boolean;message:string};
 export type KnowledgeExportSummary={path:string;itemCount:number};
 

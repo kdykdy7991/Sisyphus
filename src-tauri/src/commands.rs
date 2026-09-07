@@ -45,7 +45,48 @@ pub fn settings_save(state: State<'_, ApiConfigState>, config: ApiConfig) -> Res
     guard.database_location = db_location;
     let snapshot = guard.clone();
     drop(guard);
-    config::save(&data_dir, &snapshot).map_err(|e| e.to_string())
+    let mut store = state.profiles.lock().unwrap();
+    let active = store.active_id.clone();
+    if let Some(profile) = store.profiles.iter_mut().find(|p| p.id == active) { profile.config = snapshot; }
+    config::save_profiles(&data_dir, &store).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn settings_profiles(state: State<'_, ApiConfigState>) -> config::ApiConfigProfiles {
+    let mut store = state.profiles.lock().unwrap().clone();
+    for p in &mut store.profiles { p.config.api_key.clear(); }
+    store
+}
+
+#[tauri::command]
+pub fn settings_profile_create(state: State<'_, ApiConfigState>, name: String) -> Result<String, String> {
+    let name = name.trim(); if name.is_empty() { return Err("配置名称不能为空。".into()); }
+    let id = format!("profile-{}", chrono::Utc::now().timestamp_micros());
+    let mut config = ApiConfig::default(); config.database_location = state.db_path.display().to_string();
+    let mut store = state.profiles.lock().unwrap();
+    store.profiles.push(config::ApiConfigProfile { id: id.clone(), name: name.into(), config });
+    config::save_profiles(&state.data_dir, &store).map_err(|e| e.to_string())?; Ok(id)
+}
+
+#[tauri::command]
+pub fn settings_profile_switch(state: State<'_, ApiConfigState>, id: String) -> Result<ApiConfig, String> {
+    let mut store = state.profiles.lock().unwrap();
+    let cfg = store.profiles.iter().find(|p| p.id == id).map(|p| p.config.clone()).ok_or("配置不存在。")?;
+    store.active_id = id; config::save_profiles(&state.data_dir, &store).map_err(|e| e.to_string())?;
+    *state.inner.lock().unwrap() = cfg.clone(); let mut public = cfg; public.api_key.clear(); Ok(public)
+}
+
+#[tauri::command]
+pub fn settings_profile_delete(state: State<'_, ApiConfigState>, id: String) -> Result<(), String> {
+    let mut store = state.profiles.lock().unwrap();
+    if store.profiles.len() <= 1 { return Err("至少需要保留一份配置。".into()); }
+    let before = store.profiles.len(); store.profiles.retain(|p| p.id != id);
+    if store.profiles.len() == before { return Err("配置不存在。".into()); }
+    if id == store.active_id {
+        store.active_id = store.profiles[0].id.clone();
+        *state.inner.lock().unwrap() = store.profiles[0].config.clone();
+    }
+    config::save_profiles(&state.data_dir, &store).map_err(|e| e.to_string())
 }
 
 /// Result of a connection test, shown to the user. Never contains a key.

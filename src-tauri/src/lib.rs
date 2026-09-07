@@ -30,10 +30,12 @@ pub fn run() {
             });
             let data_dir = app.path().app_data_dir()?;
             let db_location = path.display().to_string();
-            let api_cfg = config::load(&data_dir, &db_location);
+            let profiles = config::load_profiles(&data_dir, &db_location);
+            let api_cfg = profiles.profiles.iter().find(|p| p.id == profiles.active_id).unwrap().config.clone();
             app.manage(ApiConfigState {
                 data_dir: data_dir.clone(),
                 inner: std::sync::Mutex::new(api_cfg),
+                profiles: std::sync::Mutex::new(profiles),
                 db_path: path.clone(),
             });
             // WebDAV lives in its own file so the transport credentials can
@@ -65,6 +67,10 @@ pub fn run() {
             commands::knowledge_clear,
             commands::settings_get,
             commands::settings_save,
+            commands::settings_profiles,
+            commands::settings_profile_create,
+            commands::settings_profile_switch,
+            commands::settings_profile_delete,
             commands::settings_test_connection,
             commands::vision_extract,
             commands::analyze_similarity,

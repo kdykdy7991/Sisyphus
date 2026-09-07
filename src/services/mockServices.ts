@@ -63,7 +63,8 @@ export const chatService: ChatService = {
   },
 };
 let settings: Settings = { apiBaseUrl: 'https://api.openai.com/v1', apiKey: '', chatModel: 'gpt-5', visionModel: 'gpt-5', databaseLocation: '~/Library/Application Support/Interview Kit/interview.db' };
-export const settingsService: SettingsService = { async get() { return { ...settings }; }, async save(value) { settings = { ...value }; await wait(250); }, async testConnection() { await wait(800); return { ok: true, message: 'Mock 模式下无法测试真实连接。' }; } };
+let llmProfiles = [{id:'default',name:'默认配置',config:{...settings}}]; let activeProfileId='default';
+export const settingsService: SettingsService = { async get() { return { ...settings }; }, async save(value) { settings = { ...value }; const p=llmProfiles.find(x=>x.id===activeProfileId);if(p)p.config={...settings};await wait(250); }, async profiles(){return{activeId:activeProfileId,profiles:llmProfiles.map(p=>({...p,config:{...p.config,apiKey:''}}))}},async createProfile(name){const id=`profile-${Date.now()}`;llmProfiles.push({id,name,config:{...settings,apiKey:''}});return id},async switchProfile(id){const p=llmProfiles.find(x=>x.id===id)!;activeProfileId=id;settings={...p.config};return{...settings,apiKey:''}},async deleteProfile(id){if(llmProfiles.length<=1||id===activeProfileId)throw Error('请至少保留一份配置，并先切换后再删除。');llmProfiles=llmProfiles.filter(p=>p.id!==id)}, async testConnection() { await wait(800); return { ok: true, message: 'Mock 模式下无法测试真实连接。' }; } };
 
 // Mock Backup: plain `npm run dev` (no Tauri) keeps the surface honest
 // without any actual file IO. Useful for visual development of the Settings

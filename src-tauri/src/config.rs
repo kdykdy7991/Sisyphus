@@ -42,6 +42,36 @@ fn config_path(data_dir: &Path) -> PathBuf {
     data_dir.join("config.json")
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApiConfigProfile { pub id: String, pub name: String, pub config: ApiConfig }
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApiConfigProfiles { pub active_id: String, pub profiles: Vec<ApiConfigProfile> }
+
+pub fn load_profiles(data_dir: &Path, database_location: &str) -> ApiConfigProfiles {
+    let text = fs::read_to_string(config_path(data_dir)).ok();
+    if let Some(text) = text.as_deref() {
+        if let Ok(mut store) = serde_json::from_str::<ApiConfigProfiles>(text) {
+            for p in &mut store.profiles { p.config.database_location = database_location.to_string(); }
+            if !store.profiles.is_empty() && store.profiles.iter().all(|p| p.id != store.active_id) { store.active_id = store.profiles[0].id.clone(); }
+            if !store.profiles.is_empty() { return store; }
+        }
+    }
+    let mut config = text.and_then(|v| serde_json::from_str::<ApiConfig>(&v).ok()).unwrap_or_default();
+    config.database_location = database_location.to_string();
+    ApiConfigProfiles { active_id: "default".into(), profiles: vec![ApiConfigProfile { id: "default".into(), name: "默认配置".into(), config }] }
+}
+
+pub fn save_profiles(data_dir: &Path, store: &ApiConfigProfiles) -> std::io::Result<()> {
+    fs::create_dir_all(data_dir)?;
+    let path = config_path(data_dir);
+    fs::write(&path, serde_json::to_string_pretty(store).map_err(io_err)?)?;
+    restrict_permissions(&path);
+    Ok(())
+}
+
 /// WebDAV transport settings.
 ///
 /// This is **device configuration**, not knowledge data: it is persisted in
@@ -173,6 +203,7 @@ fn restrict_permissions(path: &Path) {
 pub struct ApiConfigState {
     pub data_dir: PathBuf,
     pub inner: Mutex<ApiConfig>,
+    pub profiles: Mutex<ApiConfigProfiles>,
     pub db_path: PathBuf,
 }
 
@@ -217,6 +248,20 @@ mod tests {
         let loaded = load(&dir, "/db/location.db");
         assert_eq!(loaded.api_base_url, "https://api.openai.com/v1");
         assert_eq!(loaded.database_location, "/db/location.db");
+    }
+
+    #[test]
+    fn legacy_single_config_migrates_to_default_profile() {
+        let dir = tmp_dir("profile-migration");
+        let cfg = ApiConfig { api_key: "keep-me".into(), chat_model: "chat-a".into(), ..Default::default() };
+        save(&dir, &cfg).unwrap();
+        let store = load_profiles(&dir, "/db/live.db");
+        assert_eq!(store.active_id, "default");
+        assert_eq!(store.profiles.len(), 1);
+        assert_eq!(store.profiles[0].config.api_key, "keep-me");
+        assert_eq!(store.profiles[0].config.database_location, "/db/live.db");
+        save_profiles(&dir, &store).unwrap();
+        assert_eq!(load_profiles(&dir, "/db/live.db").profiles[0].config.chat_model, "chat-a");
     }
 
     #[cfg(unix)]

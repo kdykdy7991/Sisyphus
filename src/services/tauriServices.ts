@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { save as saveDialog, open as openDialog } from '@tauri-apps/plugin-dialog';
-import type { BackupInspect, BackupRestoreResult, BackupSummary, ChatMessage, ChatResult, ImportImage, Knowledge, KnowledgeExportSummary, Settings, SimilaritySuggestion, SyncExportSummary, SyncImportSummary, SyncInspectReport, WebDavConfig, WebDavSyncSummary, WebDavTestResult } from '../types';
+import type { BackupInspect, BackupRestoreResult, BackupSummary, ChatMessage, ChatResult, ImportImage, Knowledge, KnowledgeExportSummary, LlmProfiles, Settings, SimilaritySuggestion, SyncExportSummary, SyncImportSummary, SyncInspectReport, WebDavConfig, WebDavSyncSummary, WebDavTestResult } from '../types';
 import type { BackupService, ChatService, ImportService, KnowledgeService, SettingsService, SyncService, WebDavService } from './interfaces';
 
 // Phase 2: the Knowledge store lives in SQLite behind Tauri commands.
@@ -64,6 +64,10 @@ export const settingsService: SettingsService = {
   async save(value: Settings): Promise<void> {
     await invoke('settings_save', { config: value });
   },
+  async profiles() { return invoke<LlmProfiles>('settings_profiles'); },
+  async createProfile(name) { return invoke<string>('settings_profile_create', { name }); },
+  async switchProfile(id) { return invoke<Settings>('settings_profile_switch', { id }); },
+  async deleteProfile(id) { await invoke('settings_profile_delete', { id }); },
   async testConnection() {
     return invoke('settings_test_connection');
   },
