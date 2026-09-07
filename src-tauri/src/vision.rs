@@ -466,7 +466,7 @@ pub async fn extract_from_image(
         client,
         vision_messages(image_data_url, existing_categories),
         source,
-        3000,
+        32 * 1024,
         existing_categories,
     )
     .await
