@@ -1,4 +1,5 @@
 use tauri::State;
+use base64::Engine;
 
 use crate::backup;
 use crate::chat;
@@ -14,6 +15,36 @@ use crate::webdav;
 
 // Thin Tauri command layer: parse args, call db, convert errors to strings.
 // Keeps db.rs free of any Tauri dependency.
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DroppedImage {
+    name: String,
+    url: String,
+}
+
+/// Convert paths received from Tauri's native drag/drop event into the same
+/// in-memory data URLs used by picker and clipboard imports.
+#[tauri::command]
+pub fn import_read_dropped_images(paths: Vec<String>) -> Result<Vec<DroppedImage>, String> {
+    let mut images = Vec::new();
+    for raw in paths {
+        let path = std::path::Path::new(&raw);
+        let extension = path.extension().and_then(|value| value.to_str()).unwrap_or("").to_ascii_lowercase();
+        let mime = match extension.as_str() {
+            "png" => "image/png",
+            "jpg" | "jpeg" => "image/jpeg",
+            "webp" => "image/webp",
+            _ => continue,
+        };
+        let bytes = std::fs::read(path).map_err(|error| format!("无法读取图片 {}：{error}", path.display()))?;
+        if bytes.is_empty() { continue; }
+        let name = path.file_name().and_then(|value| value.to_str()).unwrap_or("拖入的图片").to_string();
+        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+        images.push(DroppedImage { name, url: format!("data:{mime};base64,{encoded}") });
+    }
+    Ok(images)
+}
 
 /// Read the stored API configuration. The API key is intentionally *not*
 /// included in the payload sent to the UI: the UI only needs to know whether a
