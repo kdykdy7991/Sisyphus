@@ -3,13 +3,19 @@ import type { BackupInspect, BackupRestoreResult, BackupSummary, ChatMessage, Im
 import type { BackupService, ChatService, ImportService, KnowledgeService, SettingsService, SyncService, WebDavService } from './interfaces';
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 let knowledge = [...seedKnowledge];
-const makeDraft = (image: ImportImage, index: number): Knowledge => ({
-  id: `draft-${image.id}-${index}`, question: index ? 'Redis 为什么使用单线程？' : 'Redis 为什么快？',
-  answer: index ? 'Redis 核心命令使用单线程串行执行，避免了多线程上下文切换与锁竞争，并让命令天然保持原子性。网络 I/O 可由多线程处理。' : 'Redis 的高性能来自内存访问、高效数据结构、单线程命令执行、I/O 多路复用以及简洁的 RESP 协议。',
-  domain: '后端开发', topic: 'Redis', tags: ['Redis', '基础原理'], followUps: ['Redis 6 为什么引入多线程？', 'I/O 多路复用如何工作？'], relatedIds: ['redis-fast', 'redis-single'], source: `截图导入 · ${image.name}`, createdAt: new Date().toLocaleString(), updatedAt: new Date().toLocaleString(),
-});
+let topics = [...new Set(knowledge.map(item => item.topic).filter(Boolean))];
+const makeDraft = (image: ImportImage, index: number): Knowledge => {
+  const existing = knowledge.find(item => item.topic === 'Redis');
+  return {
+    id: `draft-${image.id}-${index}`, question: index ? 'Redis 为什么使用单线程？' : 'Redis 为什么快？',
+    answer: index ? 'Redis 核心命令使用单线程串行执行，避免了多线程上下文切换与锁竞争，并让命令天然保持原子性。网络 I/O 可由多线程处理。' : 'Redis 的高性能来自内存访问、高效数据结构、单线程命令执行、I/O 多路复用以及简洁的 RESP 协议。',
+    domain: existing?.domain || '未分类', topic: existing?.topic || '', tags: ['Redis', '内存', 'I/O 多路复用'], followUps: ['Redis 6 为什么引入多线程？', 'I/O 多路复用如何工作？'], relatedIds: ['redis-fast', 'redis-single'], source: `截图导入 · ${image.name}`, createdAt: new Date().toLocaleString(), updatedAt: new Date().toLocaleString(),
+  };
+};
 export const knowledgeService: KnowledgeService = {
   async list() { return [...knowledge]; },
+  async listTopics() { return [...topics].sort((a, b) => a.localeCompare(b, 'zh-CN')); },
+  async createTopic(name) { const value = name.trim(); if (value && !topics.includes(value)) topics.push(value); },
   async get(id) { return knowledge.find(item => item.id === id); },
   async search(query) { const q = query.toLowerCase(); return knowledge.filter(item => [item.question, item.answer, item.domain, item.topic, ...item.tags].join(' ').toLowerCase().includes(q)); },
   async save(item) { const index = knowledge.findIndex(entry => entry.id === item.id); if (index >= 0) knowledge[index] = item; else knowledge = [item, ...knowledge]; return item; },
@@ -22,7 +28,20 @@ export const knowledgeService: KnowledgeService = {
   async clear() {
     const removed = knowledge.length;
     knowledge = [];
+    topics = [];
     return removed;
+  },
+  async exportMarkdown(suggestedName, ids) {
+    const selected = ids ? knowledge.filter(item => ids.includes(item.id)) : knowledge;
+    const body = selected.map((item, index) => `## ${index + 1}. ${item.question}\n\n${item.answer}`).join('\n\n---\n\n');
+    const blob = new Blob([`# Interview Kit 知识库\n\n${body}\n`], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = suggestedName;
+    link.click();
+    URL.revokeObjectURL(url);
+    return { path: suggestedName, itemCount: selected.length };
   },
 };
 export const importService: ImportService = {

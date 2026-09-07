@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { save as saveDialog, open as openDialog } from '@tauri-apps/plugin-dialog';
-import type { BackupInspect, BackupRestoreResult, BackupSummary, ChatMessage, ChatResult, ImportImage, Knowledge, Settings, SimilaritySuggestion, SyncExportSummary, SyncImportSummary, SyncInspectReport, WebDavConfig, WebDavSyncSummary, WebDavTestResult } from '../types';
+import type { BackupInspect, BackupRestoreResult, BackupSummary, ChatMessage, ChatResult, ImportImage, Knowledge, KnowledgeExportSummary, Settings, SimilaritySuggestion, SyncExportSummary, SyncImportSummary, SyncInspectReport, WebDavConfig, WebDavSyncSummary, WebDavTestResult } from '../types';
 import type { BackupService, ChatService, ImportService, KnowledgeService, SettingsService, SyncService, WebDavService } from './interfaces';
 
 // Phase 2: the Knowledge store lives in SQLite behind Tauri commands.
@@ -9,6 +9,12 @@ import type { BackupService, ChatService, ImportService, KnowledgeService, Setti
 export const knowledgeService: KnowledgeService = {
   async list(): Promise<Knowledge[]> {
     return invoke('knowledge_list');
+  },
+  async listTopics(): Promise<string[]> {
+    return invoke('topic_list');
+  },
+  async createTopic(name): Promise<void> {
+    await invoke('topic_create', { name });
   },
   async get(id): Promise<Knowledge | undefined> {
     const result = await invoke<Knowledge | null>('knowledge_get', { id });
@@ -33,6 +39,15 @@ export const knowledgeService: KnowledgeService = {
   // returns how many items were removed. Guarded by a confirm in Settings.
   async clear(): Promise<number> {
     return invoke('knowledge_clear');
+  },
+  async exportMarkdown(suggestedName, ids): Promise<KnowledgeExportSummary | null> {
+    const destinationPath = await saveDialog({
+      title: '导出知识库文档',
+      defaultPath: suggestedName,
+      filters: [{ name: 'Markdown 文档', extensions: ['md'] }],
+    });
+    if (typeof destinationPath !== 'string') return null;
+    return invoke<KnowledgeExportSummary>('knowledge_export_markdown', { destinationPath, ids });
   },
 };
 

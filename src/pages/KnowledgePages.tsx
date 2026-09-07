@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import ReactMarkdown from 'react-markdown';
 import { useApp } from '../AppContext';
 import { knowledgeService } from '../services';
 import type { Knowledge } from '../types';
@@ -18,195 +19,129 @@ import {
   FolderOpen,
   Clock,
   Filter,
+  Download,
+  LoaderCircle,
+  Check,
 } from '../components/Icons';
 import { Button, Input, Tag, Textarea, Empty, Spinner, Confirm } from '../components/UI';
 import { Drawer } from '../components/Drawer';
 import { useMediaQuery } from '../hooks/useMediaQuery';
 
 const renderAnswer = (text: string) => {
-  // Minimal markdown-ish renderer for the Vision-extracted `answer` field.
-  // The system prompt instructs the model to lay out answers with headings,
-  // ordered/unordered lists, blank-line paragraph breaks, and 2-4 space
-  // indented sub-explanations. We only handle exactly those shapes:
-  //   - `## `      -> <h2>
-  //   - `1. ` ...  -> <ol><li>  (consecutive ordered items group)
-  //   - `- ` ...   -> <ul><li>  (consecutive unordered items group)
-  //   - indented   -> a small muted <p> attached to the previous list item
-  //   - blank line -> <br> gap
-  //   - anything else -> <p>
-  // We deliberately do not pull in a markdown library; the model output is
-  // intentionally simple and bounded by the prompt.
-  const lines = text.split('\n');
-  const out: React.ReactNode[] = [];
-  let key = 0;
-  let i = 0;
-  const isOrdered = (s: string) => /^\d+\.\s+/.test(s);
-  const isUnordered = (s: string) => /^[-*]\s+/.test(s);
-  const isIndent = (s: string) => /^[ \t]+\S/.test(s);
-  const stripOrdered = (s: string) => s.replace(/^\d+\.\s+/, '');
-  const stripUnordered = (s: string) => s.replace(/^[-*]\s+/, '');
-
-  while (i < lines.length) {
-    const line = lines[i];
-    const trimmed = line.trim();
-
-    if (trimmed === '') {
-      out.push(<br key={key++} />);
-      i++;
-      continue;
-    }
-
-    if (line.startsWith('## ')) {
-      out.push(<h2 key={key++}>{line.slice(3).trim()}</h2>);
-      i++;
-      continue;
-    }
-
-    if (isOrdered(trimmed)) {
-      const items: { main: string; sub: string[] }[] = [];
-      while (i < lines.length) {
-        const cur = lines[i];
-        const curTrim = cur.trim();
-        if (curTrim === '') break;
-        if (isOrdered(curTrim)) {
-          items.push({ main: stripOrdered(curTrim), sub: [] });
-          i++;
-          continue;
-        }
-        if (items.length && isIndent(cur)) {
-          items[items.length - 1].sub.push(curTrim);
-          i++;
-          continue;
-        }
-        break;
-      }
-      out.push(
-        <ol key={key++}>
-          {items.map((it, idx) => (
-            <li key={idx}>
-              {it.main}
-              {it.sub.length > 0 && (
-                <p className="sub">{it.sub.join(' ')}</p>
-              )}
-            </li>
-          ))}
-        </ol>
-      );
-      continue;
-    }
-
-    if (isUnordered(trimmed)) {
-      const items: { main: string; sub: string[] }[] = [];
-      while (i < lines.length) {
-        const cur = lines[i];
-        const curTrim = cur.trim();
-        if (curTrim === '') break;
-        if (isUnordered(curTrim)) {
-          items.push({ main: stripUnordered(curTrim), sub: [] });
-          i++;
-          continue;
-        }
-        if (items.length && isIndent(cur)) {
-          items[items.length - 1].sub.push(curTrim);
-          i++;
-          continue;
-        }
-        break;
-      }
-      out.push(
-        <ul key={key++}>
-          {items.map((it, idx) => (
-            <li key={idx}>
-              {it.main}
-              {it.sub.length > 0 && (
-                <p className="sub">{it.sub.join(' ')}</p>
-              )}
-            </li>
-          ))}
-        </ul>
-      );
-      continue;
-    }
-
-    // Plain paragraph: gather consecutive non-blank, non-list, non-heading
-    // lines into a single <p> so we don't get one <p> per sentence.
-    const para: string[] = [line];
-    i++;
-    while (i < lines.length) {
-      const cur = lines[i];
-      const curTrim = cur.trim();
-      if (curTrim === '') break;
-      if (curTrim.startsWith('## ')) break;
-      if (isOrdered(curTrim) || isUnordered(curTrim)) break;
-      para.push(cur);
-      i++;
-    }
-    out.push(<p key={key++}>{para.join(' ')}</p>);
-  }
-
-  return out;
+  // Raw HTML is explicitly skipped. The allowlist keeps stored/model-created
+  // content inside the compact vocabulary supported by Knowledge Detail.
+  return (
+    <ReactMarkdown
+      skipHtml
+      unwrapDisallowed
+      allowedElements={['h2', 'h3', 'p', 'strong', 'em', 'code', 'pre', 'ol', 'ul', 'li', 'blockquote', 'br']}
+      components={{
+        p: props => <p {...props} className="answer-body-text" />,
+        li: props => <li {...props} className="answer-body-text" />,
+      }}
+    >
+      {text}
+    </ReactMarkdown>
+  );
 };
 
 // 主题/领域筛选面板的内容。横屏与桌面仍放在常驻左栏；竖屏放进左侧抽屉，
 // 两份渲染共用同一份数据与交互，不做 CSS 隐藏式的功能阉割。
 function TopicPanelBody({
-  domains,
   topics,
-  domain,
   knowledge,
-  onPickDomain,
+  selectedTopic,
+  selectedKeyword,
   onPickTopic,
+  onPickKeyword,
+  onOpenKnowledge,
+  onCreateTopic,
 }: {
-  domains: string[];
   topics: string[];
-  domain: string;
   knowledge: Knowledge[];
-  onPickDomain: (d: string) => void;
+  selectedTopic: string;
+  selectedKeyword: string;
   onPickTopic: (t: string) => void;
+  onPickKeyword: (tag: string) => void;
+  onOpenKnowledge: (id: string) => void;
+  onCreateTopic: () => void;
 }) {
+  const [mode, setMode] = useState<'topic' | 'keyword'>('topic');
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const keywords = [...new Set(knowledge.flatMap(item => item.tags))].sort((a, b) =>
+    a.localeCompare(b, 'zh-CN')
+  );
+  const toggleTopic = (topic: string) => {
+    setExpanded(current => {
+      const next = new Set(current);
+      if (next.has(topic)) next.delete(topic);
+      else next.add(topic);
+      return next;
+    });
+    onPickTopic(topic);
+  };
   return (
     <div className="topic-panel-body">
       <div className="tabs">
-        <b>按主题</b>
-        <span>按标签</span>
-        <span>按收藏</span>
+        <button className={mode === 'topic' ? 'active' : ''} onClick={() => setMode('topic')}>按主题</button>
+        <button className={mode === 'keyword' ? 'active' : ''} onClick={() => setMode('keyword')}>按关键词</button>
       </div>
       <div className="domain-list">
-        {domains.map(d => (
-          <button
-            className={domain === d ? 'active' : ''}
-            onClick={() => onPickDomain(d)}
-            key={d}
-          >
-            <ChevronRight />
-            {d}
-            <small>
-              {d === '全部'
-                ? knowledge.length
-                : knowledge.filter(x => x.domain === d).length}
-            </small>
-          </button>
-        ))}
-        {topics.map(t => (
-          <button className="topic" key={t} onClick={() => onPickTopic(t)}>
-            {t}
-            <small>{knowledge.filter(x => x.topic === t).length}</small>
+        {mode === 'topic' ? topics.map(topic => {
+          const children = knowledge.filter(item => item.topic === topic);
+          const open = expanded.has(topic);
+          return <div className="topic-group" key={topic}>
+            <button className={selectedTopic === topic ? 'active topic-toggle' : 'topic-toggle'} onClick={() => toggleTopic(topic)} aria-expanded={open}>
+              <ChevronRight className={open ? 'expanded' : ''}/>{topic}<small>{children.length}</small>
+            </button>
+            {open && <div className="topic-children">{children.map(item => <button key={item.id} onClick={() => onOpenKnowledge(item.id)}>{item.question}</button>)}</div>}
+          </div>;
+        }) : keywords.map(keyword => (
+          <button className={selectedKeyword === keyword ? 'active keyword' : 'keyword'} key={keyword} onClick={() => onPickKeyword(keyword)}>
+            {keyword}<small>{knowledge.filter(item => item.tags.includes(keyword)).length}</small>
           </button>
         ))}
       </div>
-      <Button variant="ghost">
+      {mode === 'topic' && <Button variant="ghost" onClick={onCreateTopic}>
         <Plus /> 新建主题
-      </Button>
+      </Button>}
     </div>
   );
 }
 
 export function KnowledgePage() {
-  const { knowledge } = useApp();
+  const { knowledge, topics, refresh } = useApp();
   const nav = useNavigate();
   const [q, setQ] = useState('');
-  const [domain, setDomain] = useState('全部');
+  const [selectedTopic, setSelectedTopic] = useState('');
+  const [selectedKeyword, setSelectedKeyword] = useState('');
   const [filterOpen, setFilterOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [selecting, setSelecting] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  const exportKnowledge = async (ids?: string[]) => {
+    setExporting(true);
+    try {
+      const date = new Date().toISOString().slice(0, 10);
+      const kind = ids ? 'selected' : 'all';
+      const result = await knowledgeService.exportMarkdown(`interview-kit-knowledge-${kind}-${date}.md`, ids);
+      if (result) window.alert(`已导出 ${result.itemCount} 条知识到：\n${result.path}`);
+    } catch (error) {
+      window.alert(`导出失败：${String(error)}`);
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const toggleSelected = (id: string) => {
+    setSelectedIds(current => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   // 切到横屏/桌面双栏时左栏已经常驻，抽屉必须收起，避免同一内容重叠出现。
   const twoPane = useMediaQuery('(min-width: 700px)');
@@ -214,60 +149,113 @@ export function KnowledgePage() {
     if (twoPane) setFilterOpen(false);
   }, [twoPane]);
 
-  const domains = ['全部', ...new Set(knowledge.map(x => x.domain))];
-  const topics = [
-    ...new Set(
-      knowledge
-        .filter(x => domain === '全部' || x.domain === domain)
-        .map(x => x.topic)
-    ),
-  ];
   const filtered = knowledge.filter(
     x =>
-      (domain === '全部' || x.domain === domain) &&
+      (!selectedTopic || x.topic === selectedTopic) &&
+      (!selectedKeyword || x.tags.includes(selectedKeyword)) &&
       [x.question, x.answer, x.topic, ...x.tags]
         .join(' ')
         .toLowerCase()
         .includes(q.toLowerCase())
   );
 
-  const pickDomain = (d: string) => setDomain(d);
-  const pickTopic = (t: string) => setQ(t);
+  const pickTopic = (topic: string) => {
+    setSelectedTopic(current => current === topic ? '' : topic);
+    setSelectedKeyword('');
+  };
+  const pickKeyword = (keyword: string) => {
+    setSelectedKeyword(current => current === keyword ? '' : keyword);
+    setSelectedTopic('');
+  };
+  const createTopic = async () => {
+    const name = window.prompt('输入新主题名称');
+    if (!name?.trim()) return;
+    try {
+      await knowledgeService.createTopic(name);
+      await refresh();
+      setSelectedTopic(name.trim());
+      setSelectedKeyword('');
+    } catch (error) {
+      window.alert(String(error));
+    }
+  };
 
   return (
     <div className="knowledge-browser">
       <aside className="topic-panel">
         <h1>知识库</h1>
         <TopicPanelBody
-          domains={domains}
           topics={topics}
-          domain={domain}
           knowledge={knowledge}
-          onPickDomain={pickDomain}
+          selectedTopic={selectedTopic}
+          selectedKeyword={selectedKeyword}
           onPickTopic={pickTopic}
+          onPickKeyword={pickKeyword}
+          onOpenKnowledge={id => nav(`/knowledge/${id}`)}
+          onCreateTopic={createTopic}
         />
       </aside>
 
       <section className="knowledge-list">
         <header>
           <div>
-            <p>{domain}</p>
-            <h2>{q ? `“${q}” 的搜索结果` : '全部知识'}</h2>
+            <p>{selectedTopic || selectedKeyword || '全部'}</p>
+            <h2>{q ? `“${q}” 的搜索结果` : selectedTopic ? `${selectedTopic} 主题` : selectedKeyword ? `${selectedKeyword} 关键词` : '全部知识'}</h2>
           </div>
-          <div className="small-search">
-            <Search />
-            <input
-              placeholder="搜索知识库…"
-              value={q}
-              onChange={e => setQ(e.target.value)}
-            />
+          <div className="knowledge-header-actions">
+            {selecting ? (
+              <>
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    const visibleIds = filtered.map(item => item.id);
+                    const allSelected = visibleIds.every(id => selectedIds.has(id));
+                    setSelectedIds(current => {
+                      const next = new Set(current);
+                      visibleIds.forEach(id => allSelected ? next.delete(id) : next.add(id));
+                      return next;
+                    });
+                  }}
+                  disabled={filtered.length === 0}
+                >
+                  全选当前结果
+                </Button>
+                <Button
+                  variant="primary"
+                  onClick={() => exportKnowledge([...selectedIds])}
+                  disabled={exporting || selectedIds.size === 0}
+                >
+                  {exporting ? <LoaderCircle className="spin" /> : <Download />}
+                  导出选中（{selectedIds.size}）
+                </Button>
+                <Button variant="ghost" onClick={() => { setSelecting(false); setSelectedIds(new Set()); }}>
+                  取消
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button onClick={() => setSelecting(true)} disabled={knowledge.length === 0}>多选</Button>
+                <Button onClick={() => exportKnowledge()} disabled={exporting || knowledge.length === 0}>
+                  {exporting ? <LoaderCircle className="spin" /> : <Download />}
+                  导出全部
+                </Button>
+              </>
+            )}
+            <div className="small-search">
+              <Search />
+              <input
+                placeholder="搜索知识库…"
+                value={q}
+                onChange={e => setQ(e.target.value)}
+              />
+            </div>
           </div>
         </header>
 
         {/* 竖屏筛选工具条：常驻左栏被 CSS 隐藏后，这里是唯一的筛选入口 */}
         <div className="knowledge-filter-bar">
           <span className="filter-current">
-            当前：{domain}
+            当前：{selectedTopic ? `主题 ${selectedTopic}` : selectedKeyword ? `关键词 ${selectedKeyword}` : '全部'}
             {q ? ` · 关键词“${q}”` : ''}
           </span>
           {q && (
@@ -278,17 +266,22 @@ export function KnowledgePage() {
           <button
             className="chip chip-primary"
             onClick={() => setFilterOpen(true)}
-            aria-label="选择领域或主题"
+            aria-label="选择主题或关键词"
           >
-            <Filter /> 选择领域 / 主题
+            <Filter /> 选择主题 / 关键词
           </button>
         </div>
 
         {filtered.length ? (
           <div className="knowledge-rows">
             {filtered.map(x => (
-              <button key={x.id} onClick={() => nav(`/knowledge/${x.id}`)}>
-                <FileText />
+              <button
+                key={x.id}
+                className={selectedIds.has(x.id) ? 'selected' : ''}
+                aria-pressed={selecting ? selectedIds.has(x.id) : undefined}
+                onClick={() => selecting ? toggleSelected(x.id) : nav(`/knowledge/${x.id}`)}
+              >
+                {selecting && selectedIds.has(x.id) ? <Check className="selection-check" /> : <FileText />}
                 <span>
                   <b>{x.question}</b>
                   <small>{x.answer.slice(0, 82)}…</small>
@@ -300,9 +293,9 @@ export function KnowledgePage() {
                 </span>
                 <div>
                   <small>
-                    {x.domain} / {x.topic}
+                    {x.domain} / {x.topic || '未分类'}
                   </small>
-                  <ChevronRight />
+                  {selecting ? <span>{selectedIds.has(x.id) ? '已选择' : '点击选择'}</span> : <ChevronRight />}
                 </div>
               </button>
             ))}
@@ -319,22 +312,24 @@ export function KnowledgePage() {
       <Drawer
         open={filterOpen}
         onClose={() => setFilterOpen(false)}
-        title="筛选领域 / 主题"
+        title="筛选主题 / 关键词"
         side="left"
       >
         <TopicPanelBody
-          domains={domains}
           topics={topics}
-          domain={domain}
           knowledge={knowledge}
-          onPickDomain={d => {
-            setDomain(d);
-            setFilterOpen(false);
-          }}
+          selectedTopic={selectedTopic}
+          selectedKeyword={selectedKeyword}
           onPickTopic={t => {
-            setQ(t);
+            pickTopic(t);
             setFilterOpen(false);
           }}
+          onPickKeyword={keyword => {
+            pickKeyword(keyword);
+            setFilterOpen(false);
+          }}
+          onOpenKnowledge={id => nav(`/knowledge/${id}`)}
+          onCreateTopic={createTopic}
         />
       </Drawer>
     </div>
@@ -364,7 +359,7 @@ function DetailRail({ item, related }: { item: Knowledge; related: Knowledge[] }
       <section>
         <h3>所属主题</h3>
         <p>
-          <FolderOpen /> {item.domain}　›　{item.topic}
+          <FolderOpen /> {item.domain}　›　{item.topic || '未分类'}
         </p>
         <p>
           <Tags /> {item.tags.length} 个标签
@@ -442,7 +437,7 @@ export function KnowledgeDetailPage() {
             .filter(
               x =>
                 item.relatedIds.includes(x.id) ||
-                (x.topic === item.topic && x.id !== item.id)
+                (Boolean(item.topic) && x.topic === item.topic && x.id !== item.id)
             )
             .slice(0, 6)
         : [],
@@ -483,7 +478,7 @@ export function KnowledgeDetailPage() {
         </button>
         <span>{item.domain}</span>
         <ChevronRight />
-        <span>{item.topic}</span>
+        <span>{item.topic || '未分类'}</span>
         <ChevronRight />
         <b>{item.question}</b>
         {/* 竖屏详情入口：右栏被 CSS 隐藏后，相关问题/主题/来源/备注/元数据都从这里进 */}
@@ -553,7 +548,7 @@ export function KnowledgeDetailPage() {
               />
             </label>
             <label>
-              核心回答
+              答案
               <Textarea
                 rows={16}
                 value={draft.answer}
@@ -627,16 +622,17 @@ export function KnowledgeDetailPage() {
               </button>
             </div>
             <div className="answer">
-              <h2>1. 核心回答</h2>
-              <div className="lead">{item.answer.split('\n')[0]}</div>
-              {renderAnswer(item.answer.split('\n').slice(1).join('\n'))}
-              <hr />
-              <h2>2. 可能的追问</h2>
-              <ul>
-                {item.followUps.map(x => (
-                  <li key={x}>{x}</li>
-                ))}
-              </ul>
+              {renderAnswer(item.answer)}
+              {item.followUps.length > 0 && (
+                <section className="follow-up-section" aria-labelledby="follow-up-title">
+                  <h2 id="follow-up-title" className="follow-up-title">可能的追问</h2>
+                  <ul>
+                    {item.followUps.map(x => (
+                      <li key={x}>{x}</li>
+                    ))}
+                  </ul>
+                </section>
+              )}
             </div>
           </>
         )}
