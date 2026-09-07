@@ -151,6 +151,11 @@ h1,h2,h3,p{margin-top:0}
 .domain-list small{margin-left:auto;color:var(--muted)}
 .domain-list .topic-toggle svg{transition:transform .16s ease}
 .domain-list .topic-toggle svg.expanded{transform:rotate(90deg)}
+.topic-row{display:flex;align-items:center;gap:3px}
+.domain-list .topic-row .topic-toggle{width:auto;flex:1;min-width:0}
+.domain-list .topic-row .topic-delete{width:32px;flex:none;padding:7px;color:#92969b;justify-content:center}
+.domain-list .topic-row .topic-delete:hover{color:#9b302a;background:#f7eeee}
+.domain-list .topic-row .topic-delete svg{width:15px;height:15px}
 .topic-children{padding:2px 0 7px 29px}
 .domain-list .topic-children button{display:block;padding:6px 8px;color:#646a70;font-size:12px;line-height:1.45;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .domain-list .topic-children button:hover{color:#111;background:#f6f6f5}

@@ -58,6 +58,7 @@ pub fn run() {
             commands::knowledge_get,
             commands::topic_list,
             commands::topic_create,
+            commands::topic_delete,
             commands::knowledge_search,
             commands::knowledge_save,
             commands::knowledge_recent,

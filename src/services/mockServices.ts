@@ -16,6 +16,7 @@ export const knowledgeService: KnowledgeService = {
   async list() { return [...knowledge]; },
   async listTopics() { return [...topics].sort((a, b) => a.localeCompare(b, 'zh-CN')); },
   async createTopic(name) { const value = name.trim(); if (value && !topics.includes(value)) topics.push(value); },
+  async deleteTopic(name) { if (knowledge.some(item => item.topic === name)) return false; const before = topics.length; topics = topics.filter(topic => topic !== name); return topics.length < before; },
   async get(id) { return knowledge.find(item => item.id === id); },
   async search(query) { const q = query.toLowerCase(); return knowledge.filter(item => [item.question, item.answer, item.domain, item.topic, ...item.tags].join(' ').toLowerCase().includes(q)); },
   async save(item) { const index = knowledge.findIndex(entry => entry.id === item.id); if (index >= 0) knowledge[index] = item; else knowledge = [item, ...knowledge]; return item; },

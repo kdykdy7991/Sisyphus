@@ -16,6 +16,9 @@ export const knowledgeService: KnowledgeService = {
   async createTopic(name): Promise<void> {
     await invoke('topic_create', { name });
   },
+  async deleteTopic(name): Promise<boolean> {
+    return invoke<boolean>('topic_delete', { name });
+  },
   async get(id): Promise<Knowledge | undefined> {
     const result = await invoke<Knowledge | null>('knowledge_get', { id });
     return result ?? undefined;

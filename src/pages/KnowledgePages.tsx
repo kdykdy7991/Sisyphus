@@ -58,6 +58,7 @@ function TopicPanelBody({
   onPickKeyword,
   onOpenKnowledge,
   onCreateTopic,
+  onDeleteTopic,
 }: {
   topics: string[];
   knowledge: Knowledge[];
@@ -67,6 +68,7 @@ function TopicPanelBody({
   onPickKeyword: (tag: string) => void;
   onOpenKnowledge: (id: string) => void;
   onCreateTopic: () => void;
+  onDeleteTopic: (topic: string) => void;
 }) {
   const [mode, setMode] = useState<'topic' | 'keyword'>('topic');
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -94,9 +96,9 @@ function TopicPanelBody({
           const children = knowledge.filter(item => noTopic ? !item.topic : item.topic === topic);
           const open = expanded.has(topic);
           return <div className="topic-group" key={topic}>
-            <button className={selectedTopic === topic ? 'active topic-toggle' : 'topic-toggle'} onClick={() => toggleTopic(topic)} aria-expanded={open}>
+            <div className="topic-row"><button className={selectedTopic === topic ? 'active topic-toggle' : 'topic-toggle'} onClick={() => toggleTopic(topic)} aria-expanded={open}>
               <ChevronRight className={open ? 'expanded' : ''}/>{noTopic ? '无主题' : topic}<small>{children.length}</small>
-            </button>
+            </button>{!noTopic && children.length === 0 && <button className="topic-delete" aria-label={`删除空主题 ${topic}`} title="删除空主题" onClick={() => onDeleteTopic(topic)}><Trash2 /></button>}</div>
             {open && <div className="topic-children">{children.map(item => <button key={item.id} onClick={() => onOpenKnowledge(item.id)}>{item.question}</button>)}</div>}
           </div>;
         }) : keywords.map(keyword => (
@@ -126,6 +128,7 @@ export function KnowledgePage() {
   const [newTopicName, setNewTopicName] = useState('');
   const [topicError, setTopicError] = useState('');
   const [creatingTopic, setCreatingTopic] = useState(false);
+  const [deletingTopic, setDeletingTopic] = useState<string>();
 
   const exportKnowledge = async (ids?: string[]) => {
     setExporting(true);
@@ -204,6 +207,16 @@ export function KnowledgePage() {
     setTopicError('');
     setTopicDialogOpen(true);
   };
+  const deleteTopic = async () => {
+    if (!deletingTopic) return;
+    const removed = await knowledgeService.deleteTopic(deletingTopic);
+    if (!removed) window.alert('该主题已有知识，无法删除。');
+    else {
+      if (selectedTopic === deletingTopic) setSelectedTopic('');
+      await refresh();
+    }
+    setDeletingTopic(undefined);
+  };
 
   return (
     <div className="knowledge-browser">
@@ -218,6 +231,7 @@ export function KnowledgePage() {
           onPickKeyword={pickKeyword}
           onOpenKnowledge={id => nav(`/knowledge/${id}`)}
           onCreateTopic={openTopicDialog}
+          onDeleteTopic={setDeletingTopic}
         />
       </aside>
 
@@ -355,6 +369,7 @@ export function KnowledgePage() {
           }}
           onOpenKnowledge={id => nav(`/knowledge/${id}`)}
           onCreateTopic={openTopicDialog}
+          onDeleteTopic={setDeletingTopic}
         />
       </Drawer>
       {topicDialogOpen && <div className="restore-overlay" role="dialog" aria-modal="true" aria-labelledby="new-topic-title" onClick={() => !creatingTopic && setTopicDialogOpen(false)}>
@@ -366,6 +381,15 @@ export function KnowledgePage() {
           <div className="restore-actions"><Button type="button" variant="ghost" disabled={creatingTopic} onClick={() => setTopicDialogOpen(false)}>取消</Button><Button type="submit" variant="primary" disabled={creatingTopic || !newTopicName.trim()}>{creatingTopic ? '创建中…' : '创建主题'}</Button></div>
         </form>
       </div>}
+      <Confirm
+        open={Boolean(deletingTopic)}
+        title="删除空主题？"
+        body={<>主题“{deletingTopic}”中没有知识，删除后不会影响知识内容。</>}
+        confirmText="删除主题"
+        destructive
+        onCancel={() => setDeletingTopic(undefined)}
+        onConfirm={() => void deleteTopic()}
+      />
     </div>
   );
 }

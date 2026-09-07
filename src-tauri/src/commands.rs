@@ -417,6 +417,16 @@ pub fn topic_create(state: State<'_, Db>, name: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+pub fn topic_delete(state: State<'_, Db>, name: String) -> Result<bool, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("主题名称不能为空。".to_string());
+    }
+    let conn = state.conn.lock().unwrap();
+    db::delete_empty_topic(&conn, name).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn knowledge_search(state: State<'_, Db>, query: String) -> Result<Vec<KnowledgePayload>, String> {
     let trigram = state.trigram;
     let conn = state.conn.lock().unwrap();

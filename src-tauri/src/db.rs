@@ -352,6 +352,17 @@ pub fn create_topic(conn: &Connection, topic: &str) -> rusqlite::Result<()> {
     Ok(())
 }
 
+pub fn delete_empty_topic(conn: &Connection, topic: &str) -> rusqlite::Result<bool> {
+    let changed = conn.execute(
+        "DELETE FROM topics WHERE topic = ?1 AND NOT EXISTS (
+            SELECT 1 FROM knowledge_items
+            WHERE knowledge_items.topic = ?1 AND deleted_at IS NULL
+         )",
+        params![topic],
+    )?;
+    Ok(changed > 0)
+}
+
 /// Fetch one item, recording its `last_read_at` as a side effect (detail view).
 /// Soft-deleted items are returned as `None` and the side-effect update is
 /// skipped — opening a deleted row must not silently extend its "read" history.
@@ -1047,6 +1058,17 @@ mod tests {
         create_topic(&conn, "Kubernetes").unwrap();
         assert_eq!(list_topics(&conn).unwrap(), vec!["Kubernetes"]);
         assert!(list(&conn).unwrap().is_empty(), "创建 Topic 不应创建虚假 Knowledge");
+        assert!(delete_empty_topic(&conn, "Kubernetes").unwrap());
+        assert!(list_topics(&conn).unwrap().is_empty());
+    }
+
+    #[test]
+    fn topic_with_active_knowledge_cannot_be_deleted() {
+        let path = tmp_path("used-topic");
+        let (conn, _) = open_inits(&path);
+        save(&conn, &payload("Redis 为什么快？")).unwrap();
+        assert!(!delete_empty_topic(&conn, "Redis").unwrap());
+        assert_eq!(list_topics(&conn).unwrap(), vec!["Redis"]);
     }
 
     #[test]
