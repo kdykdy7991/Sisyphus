@@ -318,7 +318,7 @@ export function KnowledgePage() {
                 </span>
                 <div>
                   <small>
-                    {x.domain} / {x.topic || '未分类'}
+                    {x.topic || '无主题'}
                   </small>
                   {selecting ? <span>{selectedIds.has(x.id) ? '已选择' : '点击选择'}</span> : <ChevronRight />}
                 </div>
@@ -393,7 +393,7 @@ function DetailRail({ item, related }: { item: Knowledge; related: Knowledge[] }
       <section>
         <h3>所属主题</h3>
         <p>
-          <FolderOpen /> {item.domain}　›　{item.topic || '未分类'}
+          <FolderOpen /> {item.topic || '无主题'}
         </p>
         <p>
           <Tags /> {item.tags.length} 个标签
@@ -421,7 +421,7 @@ function DetailRail({ item, related }: { item: Knowledge; related: Knowledge[] }
 
 export function KnowledgeDetailPage() {
   const { id } = useParams();
-  const { knowledge, refresh } = useApp();
+  const { knowledge, topics, refresh } = useApp();
   const nav = useNavigate();
   const [item, setItem] = useState<Knowledge>();
   const [editing, setEditing] = useState(false);
@@ -510,9 +510,7 @@ export function KnowledgeDetailPage() {
         <button onClick={() => nav('/knowledge')}>
           <ChevronLeft /> 知识库
         </button>
-        <span>{item.domain}</span>
-        <ChevronRight />
-        <span>{item.topic || '未分类'}</span>
+        <span>{item.topic || '无主题'}</span>
         <ChevronRight />
         <b>{item.question}</b>
         {/* 竖屏详情入口：右栏被 CSS 隐藏后，相关问题/主题/来源/备注/元数据都从这里进 */}
@@ -589,22 +587,17 @@ export function KnowledgeDetailPage() {
                 onChange={e => setDraft({ ...draft, answer: e.target.value })}
               />
             </label>
-            <div className="split">
-              <label>
-                领域
-                <Input
-                  value={draft.domain}
-                  onChange={e => setDraft({ ...draft, domain: e.target.value })}
-                />
-              </label>
-              <label>
-                主题
-                <Input
-                  value={draft.topic}
-                  onChange={e => setDraft({ ...draft, topic: e.target.value })}
-                />
-              </label>
-            </div>
+            <label>
+              主题
+              <select className="input" value={draft.topic} onChange={e => {
+                const topic = e.target.value;
+                const existing = knowledge.find(entry => entry.topic === topic);
+                setDraft({ ...draft, topic, domain: existing?.domain || '未分类' });
+              }}>
+                <option value="">无主题</option>
+                {topics.map(topic => <option key={topic} value={topic}>{topic}</option>)}
+              </select>
+            </label>
             <label>
               标签
               <div className="tag-editor">

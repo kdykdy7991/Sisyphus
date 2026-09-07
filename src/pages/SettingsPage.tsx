@@ -103,7 +103,7 @@ export function SettingsPage() {
       const summary = await backupService.create(dest);
       setFlash({
         kind: 'ok',
-        text: `备份完成：${summary.knowledgeCount} 条知识、${summary.domainCount} 个领域，已保存到 ${summary.path}`,
+        text: `备份完成：${summary.knowledgeCount} 条知识，已保存到 ${summary.path}`,
       });
     } catch (e) {
       setFlash({ kind: 'err', text: `备份失败：${String(e)}` });
@@ -164,7 +164,7 @@ export function SettingsPage() {
       const r = await backupService.restore(path);
       setFlash({
         kind: 'ok',
-        text: `恢复完成：已替换为 ${r.knowledgeCount} 条知识、${r.domainCount} 个领域。正在重新加载应用…`,
+        text: `恢复完成：已替换为 ${r.knowledgeCount} 条知识。正在重新加载应用…`,
       });
       // MVP: simplest reliable reset is a full window reload. This drops any
       // in-memory Chat history, Import session, and stale Settings state, and
@@ -531,10 +531,6 @@ function RestoreConfirm({
           <div>
             <dt>知识条目</dt>
             <dd>{report.knowledgeCount}</dd>
-          </div>
-          <div>
-            <dt>知识领域</dt>
-            <dd>{report.domainCount}</dd>
           </div>
           <div>
             <dt>数据库格式</dt>

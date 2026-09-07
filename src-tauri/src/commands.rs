@@ -348,7 +348,7 @@ fn knowledge_markdown(items: &[KnowledgePayload]) -> String {
     for (index, item) in items.iter().enumerate() {
         let question = item.question.split_whitespace().collect::<Vec<_>>().join(" ");
         out.push_str(&format!("\n---\n\n## {}. {}\n\n", index + 1, question));
-        out.push_str(&format!("**领域 / 主题：** {} / {}\n\n", item.domain, item.topic));
+        out.push_str(&format!("**主题：** {}\n\n", if item.topic.is_empty() { "无主题" } else { &item.topic }));
         if !item.tags.is_empty() {
             out.push_str(&format!("**标签：** {}\n\n", item.tags.join("、")));
         }

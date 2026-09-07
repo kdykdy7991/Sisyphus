@@ -73,7 +73,7 @@ export function HomePage() {
     const needle = q.toLowerCase();
     return knowledge
       .filter(x =>
-        [x.question, x.topic, x.domain, ...x.tags]
+        [x.question, x.topic, ...x.tags]
           .join(' ')
           .toLowerCase()
           .includes(needle)
@@ -152,7 +152,7 @@ export function HomePage() {
                     <span>
                       <b>{x.question}</b>
                       <small>
-                        {x.domain} / {x.topic}
+                        {x.topic || '无主题'}
                       </small>
                     </span>
                   </button>
@@ -222,7 +222,7 @@ export function HomePage() {
                       <FileText />
                       <span className="recent-title">{x.question}</span>
                       <span className="recent-meta">
-                        {x.domain}　›　{x.topic}
+                        {x.topic || '无主题'}
                       </span>
                       <span className="recent-time">
                         {relativeTime(x.lastReadAt || x.updatedAt) || '未读'}
@@ -260,7 +260,7 @@ export function HomePage() {
                         <FileText />
                         <span className="recent-title">{x.question}</span>
                         <span className="recent-meta">
-                          {x.domain}　›　{x.topic}
+                          {x.topic || '无主题'}
                         </span>
                         <span
                           className={`recent-time${

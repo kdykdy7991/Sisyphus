@@ -50,7 +50,7 @@ function ChatRail({
             <span>
               <b>{x.question}</b>
               <small>
-                {x.domain} / {x.topic}
+                {x.topic || '无主题'}
               </small>
             </span>
             <ChevronRight />
@@ -124,7 +124,6 @@ export function ChatPage() {
     if (el) el.scrollTop = el.scrollHeight;
   }, [kbInset, messages.length, loading]);
 
-  const domains = [...new Set(knowledge.map(x => x.domain).filter(Boolean))] as string[];
   const topics = [...new Set(knowledge.map(x => x.topic).filter(Boolean))] as string[];
   const scopeName = scope === '' ? '全部知识' : scope.slice(scope.indexOf(':') + 1);
   const latest = [...messages].reverse().find(x => x.role === 'assistant' && x.citations?.length);
@@ -160,11 +159,6 @@ export function ChatPage() {
         <header>
           <select value={scope} onChange={e => setScope(e.target.value)}>
             <option value="">全部知识</option>
-            {domains.map(d => (
-              <option key={'d' + d} value={`domain:${d}`}>
-                {d}
-              </option>
-            ))}
             {topics.map(t => (
               <option key={'t' + t} value={`topic:${t}`}>
                 {t}
