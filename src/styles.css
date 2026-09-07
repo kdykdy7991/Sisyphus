@@ -462,6 +462,7 @@ h1,h2,h3,p{margin-top:0}
 .profile-create .input{margin:0;background:#fff}
 .profile-form{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:5px 14px;padding:18px 24px}
 .profile-form label{min-width:0}
+.profile-name-field{grid-column:1/-1}
 .profile-manager>.conn-msg{margin:0 24px 14px;padding:9px 12px;border-radius:6px;font-size:12px}
 .profile-manager>.restore-actions{padding:14px 24px;margin:0;border-top:1px solid var(--line)}
 

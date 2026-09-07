@@ -69,6 +69,16 @@ pub fn settings_profile_create(state: State<'_, ApiConfigState>, name: String) -
 }
 
 #[tauri::command]
+pub fn settings_profile_rename(state: State<'_, ApiConfigState>, id: String, name: String) -> Result<(), String> {
+    let name = name.trim();
+    if name.is_empty() { return Err("配置名称不能为空。".into()); }
+    let mut store = state.profiles.lock().unwrap();
+    let profile = store.profiles.iter_mut().find(|p| p.id == id).ok_or("配置不存在。")?;
+    profile.name = name.into();
+    config::save_profiles(&state.data_dir, &store).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 pub fn settings_profile_switch(state: State<'_, ApiConfigState>, id: String) -> Result<ApiConfig, String> {
     let mut store = state.profiles.lock().unwrap();
     let cfg = store.profiles.iter().find(|p| p.id == id).map(|p| p.config.clone()).ok_or("配置不存在。")?;

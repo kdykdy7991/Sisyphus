@@ -27,6 +27,7 @@ export function SettingsPage() {
   const [flash, setFlash] = useState<Flash>(null);
   const [profiles, setProfiles] = useState<LlmProfiles>();
   const [newProfileName, setNewProfileName] = useState('');
+  const [profileName, setProfileName] = useState('');
   const [profileManagerOpen, setProfileManagerOpen] = useState(false);
 
   const [busy, setBusy] = useState<'backup' | 'restore' | null>(null);
@@ -53,7 +54,10 @@ export function SettingsPage() {
 
   useEffect(() => {
     settingsService.get().then(setS);
-    settingsService.profiles().then(setProfiles);
+    settingsService.profiles().then(value => {
+      setProfiles(value);
+      setProfileName(value.profiles.find(profile => profile.id === value.activeId)?.name ?? '');
+    });
     webdavService.getConfig().then(setWd);
   }, []);
 
@@ -82,7 +86,14 @@ export function SettingsPage() {
     setState('saved');
     setTimeout(() => setState(''), 1500);
   };
-  const switchProfile = async (id: string) => { setS(await settingsService.switchProfile(id)); setProfiles(await settingsService.profiles()); setState(''); setMsg(''); };
+  const switchProfile = async (id: string) => {
+    setS(await settingsService.switchProfile(id));
+    const next = await settingsService.profiles();
+    setProfiles(next);
+    setProfileName(next.profiles.find(profile => profile.id === next.activeId)?.name ?? '');
+    setState('');
+    setMsg('');
+  };
   const createProfile = async () => {
     if (!newProfileName.trim()) return;
     await settingsService.createProfile(newProfileName.trim());
@@ -97,6 +108,8 @@ export function SettingsPage() {
     }
   };
   const saveProfile = async () => {
+    if (!profiles || !profileName.trim()) return;
+    await settingsService.renameProfile(profiles.activeId, profileName.trim());
     await settingsService.save(s);
     setProfiles(await settingsService.profiles());
     setState('saved');
@@ -463,13 +476,14 @@ export function SettingsPage() {
             </div>
             <div className="profile-create"><Input value={newProfileName} maxLength={30} placeholder="新配置名称" onChange={e=>setNewProfileName(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')void createProfile();}}/><Button onClick={()=>void createProfile()} disabled={!newProfileName.trim()}>新增配置</Button></div>
             <div className="profile-form">
+              <label className="profile-name-field">配置名称<Input value={profileName} maxLength={30} placeholder="例如 OpenAI · GPT-5" onChange={e => setProfileName(e.target.value)} /></label>
               <label>API Base URL<Input value={s.apiBaseUrl} onChange={(e) => set('apiBaseUrl', e.target.value)} /></label>
               <label>API Key<div className="password"><Input type={show ? 'text' : 'password'} value={s.apiKey} placeholder="sk-••••••••••••" onChange={(e) => set('apiKey', e.target.value)} /><button onClick={() => setShow(!show)}>{show ? <EyeOff /> : <Eye />}</button></div></label>
               <label>Chat Model<Input value={s.chatModel} onChange={(e) => set('chatModel', e.target.value)} /></label>
               <label>Vision Model<Input value={s.visionModel} onChange={(e) => set('visionModel', e.target.value)} /></label>
             </div>
             {msg && <p className={state === 'fail' ? 'conn-msg err' : 'conn-msg ok'}>{msg}</p>}
-            <div className="restore-actions"><Button onClick={test}>{state === 'testing' ? <><LoaderCircle className="spin" /> 测试中</> : state === 'ok' ? <><Check /> 连接正常</> : state === 'fail' ? '测试失败' : '测试连接'}</Button><Button variant="primary" onClick={()=>void saveProfile()}>保存配置</Button></div>
+            <div className="restore-actions"><Button onClick={test}>{state === 'testing' ? <><LoaderCircle className="spin" /> 测试中</> : state === 'ok' ? <><Check /> 连接正常</> : state === 'fail' ? '测试失败' : '测试连接'}</Button><Button variant="primary" disabled={!profileName.trim()} onClick={()=>void saveProfile()}>保存配置</Button></div>
           </div>
         </div>
       )}

@@ -69,6 +69,7 @@ pub fn run() {
             commands::settings_save,
             commands::settings_profiles,
             commands::settings_profile_create,
+            commands::settings_profile_rename,
             commands::settings_profile_switch,
             commands::settings_profile_delete,
             commands::settings_test_connection,

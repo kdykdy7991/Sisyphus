@@ -66,6 +66,7 @@ export const settingsService: SettingsService = {
   },
   async profiles() { return invoke<LlmProfiles>('settings_profiles'); },
   async createProfile(name) { return invoke<string>('settings_profile_create', { name }); },
+  async renameProfile(id, name) { await invoke('settings_profile_rename', { id, name }); },
   async switchProfile(id) { return invoke<Settings>('settings_profile_switch', { id }); },
   async deleteProfile(id) { await invoke('settings_profile_delete', { id }); },
   async testConnection() {

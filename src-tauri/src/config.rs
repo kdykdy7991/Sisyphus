@@ -50,18 +50,43 @@ pub struct ApiConfigProfile { pub id: String, pub name: String, pub config: ApiC
 #[serde(rename_all = "camelCase")]
 pub struct ApiConfigProfiles { pub active_id: String, pub profiles: Vec<ApiConfigProfile> }
 
+fn inferred_profile_name(config: &ApiConfig) -> String {
+    let host = config.api_base_url
+        .split_once("://").map(|(_, rest)| rest).unwrap_or(&config.api_base_url)
+        .split('/').next().unwrap_or("")
+        .trim_start_matches("api.");
+    let provider = match host {
+        "openai.com" => "OpenAI".to_string(),
+        "" => "LLM".to_string(),
+        value => value.to_string(),
+    };
+    let model = if config.vision_model.trim().is_empty() { config.chat_model.trim() } else { config.vision_model.trim() };
+    if model.is_empty() { provider } else { format!("{provider} · {model}") }
+}
+
 pub fn load_profiles(data_dir: &Path, database_location: &str) -> ApiConfigProfiles {
     let text = fs::read_to_string(config_path(data_dir)).ok();
     if let Some(text) = text.as_deref() {
         if let Ok(mut store) = serde_json::from_str::<ApiConfigProfiles>(text) {
             for p in &mut store.profiles { p.config.database_location = database_location.to_string(); }
+            let mut renamed = false;
+            for p in &mut store.profiles {
+                if p.name.trim().is_empty() || p.name == "默认配置" {
+                    p.name = inferred_profile_name(&p.config);
+                    renamed = true;
+                }
+            }
             if !store.profiles.is_empty() && store.profiles.iter().all(|p| p.id != store.active_id) { store.active_id = store.profiles[0].id.clone(); }
-            if !store.profiles.is_empty() { return store; }
+            if !store.profiles.is_empty() {
+                if renamed { let _ = save_profiles(data_dir, &store); }
+                return store;
+            }
         }
     }
     let mut config = text.and_then(|v| serde_json::from_str::<ApiConfig>(&v).ok()).unwrap_or_default();
     config.database_location = database_location.to_string();
-    ApiConfigProfiles { active_id: "default".into(), profiles: vec![ApiConfigProfile { id: "default".into(), name: "默认配置".into(), config }] }
+    let name = inferred_profile_name(&config);
+    ApiConfigProfiles { active_id: "default".into(), profiles: vec![ApiConfigProfile { id: "default".into(), name, config }] }
 }
 
 pub fn save_profiles(data_dir: &Path, store: &ApiConfigProfiles) -> std::io::Result<()> {
