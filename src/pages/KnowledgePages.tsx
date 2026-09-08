@@ -156,8 +156,8 @@ export function KnowledgePage() {
     });
   };
 
-  // 切到横屏/桌面双栏时左栏已经常驻，抽屉必须收起，避免同一内容重叠出现。
-  const twoPane = useMediaQuery('(min-width: 700px)');
+  // 只有宽桌面才常驻主题栏；紧凑桌面使用抽屉，给列表和操作区留足空间。
+  const twoPane = useMediaQuery('(min-width: 1601px)');
   useEffect(() => {
     if (twoPane) setFilterOpen(false);
   }, [twoPane]);
@@ -326,28 +326,25 @@ export function KnowledgePage() {
                 onChange={e => setQ(e.target.value)}
               />
             </div>
+            <div className="knowledge-filter-bar">
+              <span className="filter-current">
+                {selectedTopic ? `主题：${selectedTopic === NO_TOPIC ? '无主题' : selectedTopic}` : selectedKeyword ? `关键词：${selectedKeyword}` : '全部'}
+              </span>
+              {q && (
+                <button className="chip" onClick={() => setQ('')}>
+                  清除关键词
+                </button>
+              )}
+              <button
+                className="chip chip-primary"
+                onClick={() => setFilterOpen(true)}
+                aria-label="选择主题或关键词"
+              >
+                <Filter /> 选择主题 / 关键词
+              </button>
+            </div>
           </div>
         </header>
-
-        {/* 竖屏筛选工具条：常驻左栏被 CSS 隐藏后，这里是唯一的筛选入口 */}
-        <div className="knowledge-filter-bar">
-          <span className="filter-current">
-            当前：{selectedTopic ? `主题 ${selectedTopic === NO_TOPIC ? '无主题' : selectedTopic}` : selectedKeyword ? `关键词 ${selectedKeyword}` : '全部'}
-            {q ? ` · 关键词“${q}”` : ''}
-          </span>
-          {q && (
-            <button className="chip" onClick={() => setQ('')}>
-              清除关键词
-            </button>
-          )}
-          <button
-            className="chip chip-primary"
-            onClick={() => setFilterOpen(true)}
-            aria-label="选择主题或关键词"
-          >
-            <Filter /> 选择主题 / 关键词
-          </button>
-        </div>
 
         {filtered.length ? (
           <>
