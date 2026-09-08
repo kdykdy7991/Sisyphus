@@ -920,6 +920,19 @@ button,a{transition:background .14s ease,color .14s ease,border-color .14s ease}
 
   .knowledge-list>header{flex-wrap:wrap;gap:12px;padding-bottom:18px}
 
+  /* Don't let the title block shrink below its own content width — the
+     previous version had it competing with the right-side actions for
+     flex space, and on a narrow pad the "全部知识" text would compress
+     to a 2-line wrap while the search box still claimed 200px. */
+  .knowledge-list>header>div:first-child{flex:0 0 auto;min-width:0}
+
+  /* Search box: let it shrink below the desktop 200px floor in the pad
+     band, otherwise the right-side actions overflow and the whole header
+     layout breaks. Pair with `flex:1` so it claims remaining space. */
+  .small-search{flex:1 1 180px;min-width:0}
+
+  .small-search input{flex:1;min-width:0;width:100%}
+
   .knowledge-rows>button>div>.recent-meta,.knowledge-rows>button>div .chevron{display:none}
 
   .detail{grid-template-columns:minmax(0,1fr) 260px;padding-top:54px}
@@ -1116,4 +1129,32 @@ button,a{transition:background .14s ease,color .14s ease,border-color .14s ease}
 
   .icon-btn{min-width:44px;min-height:44px}
 
+}
+
+/* Knowledge browser: compact desktop windows need the content width more than
+   a second persistent rail. Keep filters available through the existing drawer. */
+@media (min-width:700px) and (max-width:1400px){
+  .knowledge-browser{grid-template-columns:minmax(0,1fr) !important}
+
+  .knowledge-browser>.topic-panel{display:none !important}
+
+  .knowledge-list{padding:28px clamp(24px,3vw,40px) 70px}
+
+  .knowledge-list>header{flex-direction:column;align-items:stretch;gap:16px;padding-bottom:18px}
+
+  .knowledge-header-actions{width:100%;justify-content:flex-start}
+
+  .knowledge-header-actions .small-search{flex:1 1 240px;min-width:220px}
+
+  .knowledge-header-actions .small-search input{width:100%;min-width:0}
+
+  .knowledge-filter-bar{display:flex;align-items:center;gap:8px;padding:10px 0 12px;border-bottom:1px solid var(--line);background:#fff;position:sticky;top:0;z-index:4}
+
+  .knowledge-filter-bar .filter-current{min-width:0;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:12px}
+
+  .knowledge-filter-bar .chip{flex:0 0 auto;display:inline-flex;align-items:center;gap:6px;min-height:40px;padding:6px 13px;border-radius:20px;border:1px solid var(--line);background:#fff;font-size:13px;color:#39414b}
+
+  .knowledge-filter-bar .chip svg{width:16px;height:16px}
+
+  .knowledge-filter-bar .chip-primary{background:#10151f;border-color:#10151f;color:#fff}
 }
