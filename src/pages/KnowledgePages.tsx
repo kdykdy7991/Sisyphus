@@ -46,6 +46,7 @@ const renderAnswer = (text: string) => {
 };
 
 const NO_TOPIC = '__no_topic__';
+const PAGE_SIZE = 20;
 
 // 主题/领域筛选面板的内容。横屏与桌面仍放在常驻左栏；竖屏放进左侧抽屉，
 // 两份渲染共用同一份数据与交互，不做 CSS 隐藏式的功能阉割。
@@ -129,6 +130,8 @@ export function KnowledgePage() {
   const [topicError, setTopicError] = useState('');
   const [creatingTopic, setCreatingTopic] = useState(false);
   const [deletingTopic, setDeletingTopic] = useState<string>();
+  const [createdSort, setCreatedSort] = useState<'desc' | 'asc'>('desc');
+  const [page, setPage] = useState(1);
 
   const exportKnowledge = async (ids?: string[]) => {
     setExporting(true);
@@ -159,15 +162,33 @@ export function KnowledgePage() {
     if (twoPane) setFilterOpen(false);
   }, [twoPane]);
 
-  const filtered = knowledge.filter(
-    x =>
-      (!selectedTopic || (selectedTopic === NO_TOPIC ? !x.topic : x.topic === selectedTopic)) &&
-      (!selectedKeyword || x.tags.includes(selectedKeyword)) &&
-      [x.question, x.answer, x.topic, ...x.tags]
-        .join(' ')
-        .toLowerCase()
-        .includes(q.toLowerCase())
-  );
+  const filtered = useMemo(() => knowledge
+    .filter(
+      x =>
+        (!selectedTopic || (selectedTopic === NO_TOPIC ? !x.topic : x.topic === selectedTopic)) &&
+        (!selectedKeyword || x.tags.includes(selectedKeyword)) &&
+        [x.question, x.answer, x.topic, ...x.tags]
+          .join(' ')
+          .toLowerCase()
+          .includes(q.toLowerCase())
+    )
+    .sort((a, b) => {
+      const aTime = Date.parse(a.createdAt);
+      const bTime = Date.parse(b.createdAt);
+      const timeOrder = (Number.isNaN(aTime) ? 0 : aTime) - (Number.isNaN(bTime) ? 0 : bTime);
+      if (timeOrder !== 0) return createdSort === 'asc' ? timeOrder : -timeOrder;
+      return createdSort === 'asc' ? a.id.localeCompare(b.id) : b.id.localeCompare(a.id);
+    }), [knowledge, selectedTopic, selectedKeyword, q, createdSort]);
+  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const paged = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
+  useEffect(() => {
+    setPage(1);
+  }, [q, selectedTopic, selectedKeyword, createdSort]);
+
+  useEffect(() => {
+    setPage(current => Math.min(current, pageCount));
+  }, [pageCount]);
 
   const pickTopic = (topic: string) => {
     setSelectedTopic(current => current === topic ? '' : topic);
@@ -280,6 +301,23 @@ export function KnowledgePage() {
                 </Button>
               </>
             )}
+            <div className="knowledge-sort" role="group" aria-label="按创建时间排序">
+              <span className="knowledge-sort-label"><Clock /> 创建时间</span>
+              <span className="knowledge-sort-options">
+                <button
+                  type="button"
+                  className={createdSort === 'desc' ? 'active' : ''}
+                  aria-pressed={createdSort === 'desc'}
+                  onClick={() => setCreatedSort('desc')}
+                >最新</button>
+                <button
+                  type="button"
+                  className={createdSort === 'asc' ? 'active' : ''}
+                  aria-pressed={createdSort === 'asc'}
+                  onClick={() => setCreatedSort('asc')}
+                >最早</button>
+              </span>
+            </div>
             <div className="small-search">
               <Search />
               <input
@@ -312,8 +350,9 @@ export function KnowledgePage() {
         </div>
 
         {filtered.length ? (
+          <>
           <div className="knowledge-rows">
-            {filtered.map(x => (
+            {paged.map(x => (
               <button
                 key={x.id}
                 className={selectedIds.has(x.id) ? 'selected' : ''}
@@ -339,6 +378,18 @@ export function KnowledgePage() {
               </button>
             ))}
           </div>
+          <nav className="knowledge-pagination" aria-label="知识库分页">
+            <span>共 {filtered.length} 条 · 第 {page} / {pageCount} 页</span>
+            <div>
+              <Button variant="ghost" disabled={page === 1} onClick={() => setPage(current => current - 1)}>
+                <ChevronLeft /> 上一页
+              </Button>
+              <Button variant="ghost" disabled={page === pageCount} onClick={() => setPage(current => current + 1)}>
+                下一页 <ChevronRight />
+              </Button>
+            </div>
+          </nav>
+          </>
         ) : (
           <Empty
             icon={<Search />}

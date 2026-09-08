@@ -97,8 +97,8 @@ answer 是适合快速复习的编辑后技术内容，不是 OCR 原文、长�
 
 ## 8. Markdown Contract
 - 页面已经展示 question，answer 中禁止使用 `#` 一级标题。
-- 允许使用：普通段落、`##`、`###`、有序列表、无序列表、最多一层子列表、`**粗体**`、行内代码、代码块、引用。
-- 禁止使用：`####` 及更深标题、表格、链接、图片、原始 HTML、水平分隔线、斜体，以及上述范围之外的 Markdown。
+- 允许使用：普通段落、`##`、`###`、有序列表、无序列表、最多一层子列表、`**粗体**`、`*斜体*`、行内代码、代码块、引用。
+- 禁止使用：`####` 及更深标题、表格、链接、图片、原始 HTML、水平分隔线，以及上述范围之外的 Markdown。
 - blockquote 的正式语义是 Important / 重点提醒。生成每个 answer 前，必须主动判断截图内容中是否存在值得用户单独记忆的关键句。
 - 如果存在以下内容，应优先选择其中最重要的一句话使用 blockquote：易混淆或常见误区、反直觉事实、决定整题理解正确性的核心结论、关键边界 / 前提 / 限制条件、面试中用于区分理解深度的重要结论、明显注意事项或错误认知纠正。
 - Important 必须是一句完整、独立的话；单独拿出来仍然有意义，并且值得用户快速复习时停下来记住。只使用标准 Markdown 的 `> 内容` 表达。
@@ -265,26 +265,6 @@ pub struct VisionDraft {
     pub follow_up_questions: Vec<String>,
 }
 
-fn contains_single_emphasis(text: &str, marker: char) -> bool {
-    let chars = text.chars().collect::<Vec<_>>();
-    let mut open = false;
-    for (index, current) in chars.iter().enumerate() {
-        if *current != marker {
-            continue;
-        }
-        let adjacent_same = index.checked_sub(1).is_some_and(|i| chars[i] == marker)
-            || chars.get(index + 1).is_some_and(|c| *c == marker);
-        if adjacent_same {
-            continue; // `**bold**` is part of the allowed contract.
-        }
-        if open {
-            return true;
-        }
-        open = true;
-    }
-    false
-}
-
 fn validate_answer_markdown(answer: &str) -> Result<(), String> {
     let mut in_code_fence = false;
     for line in answer.lines() {
@@ -319,10 +299,6 @@ fn validate_answer_markdown(answer: &str) -> Result<(), String> {
         if compact.starts_with('|') || compact.ends_with('|') {
             return Err("answer 不允许使用 Markdown 表格".to_string());
         }
-        if contains_single_emphasis(compact, '*') || contains_single_emphasis(compact, '_') {
-            return Err("answer 不允许使用斜体".to_string());
-        }
-
         let hashes = trimmed.chars().take_while(|c| *c == '#').count();
         if hashes > 0
             && trimmed.chars().nth(hashes).is_some_and(char::is_whitespace)
@@ -572,8 +548,9 @@ mod tests {
         assert!(validate_answer_markdown("[文档](https://example.com)").is_err());
         assert!(validate_answer_markdown("| A | B |").is_err());
         assert!(validate_answer_markdown("<aside>注意</aside>").is_err());
-        assert!(validate_answer_markdown("这是 *斜体* 内容").is_err());
-        assert!(validate_answer_markdown("这是 _斜体_ 内容").is_err());
+        assert!(validate_answer_markdown("这是 *斜体* 内容").is_ok());
+        assert!(validate_answer_markdown("这是 _斜体_ 内容").is_ok());
+        assert!(validate_answer_markdown("chunk_index 和 source_ref").is_ok());
         assert!(validate_answer_markdown("这是 **粗体** 内容").is_ok());
     }
 
@@ -656,7 +633,8 @@ mod tests {
         assert!(VISION_SYSTEM_PROMPT.contains("比较题：按比较维度组织"));
         assert!(VISION_SYSTEM_PROMPT.contains("流程题：严格按照发生顺序使用有序列表"));
         assert!(VISION_SYSTEM_PROMPT.contains("输出前内部自检"));
-        assert!(VISION_SYSTEM_PROMPT.contains("水平分隔线、斜体"));
+        assert!(VISION_SYSTEM_PROMPT.contains("`*斜体*`"));
+        assert!(!VISION_SYSTEM_PROMPT.contains("水平分隔线、斜体"));
         assert!(VISION_SYSTEM_PROMPT.contains("blockquote 的正式语义是 Important / 重点提醒"));
         assert!(VISION_SYSTEM_PROMPT.contains("每个 answer 通常使用 0~1 个 blockquote"));
         assert!(VISION_SYSTEM_PROMPT.contains("复杂答案最多 2 个"));

@@ -189,6 +189,16 @@ h1,h2,h3,p{margin-top:0}
 
 .knowledge-header-actions{display:flex;align-items:center;justify-content:flex-end;gap:10px;flex-wrap:wrap}
 .knowledge-header-actions .btn{white-space:nowrap}
+.knowledge-sort{height:40px;display:flex;align-items:center;gap:4px;padding:3px 4px 3px 10px;border:1px solid var(--line);border-radius:11px;background:color-mix(in srgb,var(--surface) 88%,var(--bg));box-shadow:0 1px 2px rgba(35,45,40,.04);white-space:nowrap}
+.knowledge-sort-label{display:flex;align-items:center;gap:5px;padding-right:5px;color:var(--muted);font-size:12px}
+.knowledge-sort-label svg{width:14px;height:14px}
+.knowledge-sort-options{display:flex;align-items:center;gap:2px;padding:2px;border-radius:8px;background:rgba(90,110,98,.08)}
+.knowledge-sort-options button{height:28px;padding:0 10px;border:0;border-radius:6px;background:transparent;color:var(--muted);font-size:12px;font-weight:600;cursor:pointer;transition:background .16s ease,color .16s ease,box-shadow .16s ease}
+.knowledge-sort-options button:hover{color:var(--text)}
+.knowledge-sort-options button.active{background:var(--surface);color:var(--accent);box-shadow:0 1px 3px rgba(35,45,40,.13)}
+.knowledge-sort-options button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.knowledge-pagination{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-top:20px;color:var(--muted);font-size:13px}
+.knowledge-pagination>div{display:flex;gap:8px}
 .knowledge-rows>button.selected{background:#edf5f1;box-shadow:inset 3px 0 #587363}
 .knowledge-rows .selection-check{color:#47705b}
 
