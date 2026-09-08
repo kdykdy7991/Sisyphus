@@ -1,4 +1,4 @@
-// Backup / Restore for the local Interview Kit knowledge base.
+// Backup / Restore for the local Sisyphus knowledge base.
 //
 // Scope: the only thing a backup carries is the user's Knowledge data. It is
 // intentionally NOT an "application environment" backup: the model config
@@ -197,7 +197,7 @@ fn read_archive(path: &Path) -> Result<Vec<BackupEntry>, BackupError> {
     f.read_exact(&mut header)
         .map_err(|_| BackupError::InvalidArchive("file too small to be a backup".into()))?;
     if &header[0..8] != MAGIC {
-        return Err(BackupError::InvalidArchive("not an Interview Kit backup (bad magic)".into()));
+        return Err(BackupError::InvalidArchive("not a Sisyphus backup (bad magic)".into()));
     }
     let version = u16::from_le_bytes([header[8], header[9]]);
     if version != FORMAT_VERSION {
@@ -344,7 +344,7 @@ pub fn create(db_path: &Path, dest_path: &Path) -> Result<Manifest, BackupError>
     let created_at = chrono::Utc::now().to_rfc3339();
     let manifest = Manifest {
         format_version: FORMAT_VERSION,
-        app: "Interview Kit".to_string(),
+        app: "Sisyphus".to_string(),
         created_at,
         database_schema_version: user_version,
         knowledge_count,
@@ -824,7 +824,7 @@ mod tests {
         // first, which would clobber the file we just wrote. Plain
         // `Connection::open` opens the replaced file in place.
         replace_live_db(&live, &db_bytes).expect("replace");
-        let mut guard = Connection::open(&live).expect("open replaced");
+        let guard = Connection::open(&live).expect("open replaced");
         // Migrate + FTS rebuild. The public `db` module exposes this as
         // `after_restore`; we re-run the equivalent schema init here so the
         // test stays self-contained. We deliberately use the plain

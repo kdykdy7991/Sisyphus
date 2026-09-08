@@ -1,4 +1,4 @@
-# Interview Kit Pad 端适配实施方案
+# Sisyphus Pad 端适配实施方案
 
 > 文档状态：可实施版本 1.1  
 > 目标平台：OPPO Pad Mini（OPD2515，自用 APK，不涉及应用商店上架）  

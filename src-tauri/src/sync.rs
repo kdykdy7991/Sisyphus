@@ -56,7 +56,7 @@ use crate::webdav;
 /// Wire-format version of `SyncSnapshot`. Bump only on a breaking change to
 /// the schema. Currently = 1; readers MUST reject other versions.
 pub const SYNC_FORMAT_VERSION: u16 = 1;
-pub const SYNC_APP: &str = "Interview Kit";
+pub const SYNC_APP: &str = "Sisyphus";
 
 /// One knowledge item in a snapshot. Mirrors `KnowledgePayload` minus the
 /// local numeric `id` (a device-internal concept) and plus explicit
@@ -239,6 +239,7 @@ pub struct MergePlan {
 }
 
 impl MergePlan {
+    #[cfg(test)]
     pub fn stats(&self) -> MergeStats {
         let mut s = MergeStats::default();
         for a in &self.actions {
@@ -265,6 +266,7 @@ pub struct MergeStats {
 }
 
 impl MergeStats {
+    #[cfg(test)]
     pub fn total(&self) -> usize {
         self.inserted + self.updated + self.deleted + self.skipped + self.conflicts
     }
@@ -285,9 +287,6 @@ impl MergeStats {
 pub enum SyncError {
     /// The snapshot's `formatVersion` is not one this build understands.
     UnsupportedVersion(u16),
-    /// The snapshot is well-formed JSON but its items violate the contract
-    /// (empty sync_id, dup sync_id, sync_id too long, ...).
-    InvalidSnapshot(String),
     InvalidSyncId(String),
     DuplicateSyncId(String),
     /// A sqlite error during snapshot creation or plan apply.
@@ -311,7 +310,6 @@ impl fmt::Display for SyncError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             SyncError::UnsupportedVersion(v) => write!(f, "不支持的同步快照版本：{v}"),
-            SyncError::InvalidSnapshot(s) => write!(f, "同步快照无效：{s}"),
             SyncError::InvalidSyncId(s) => write!(f, "同步 ID 无效：{s}"),
             SyncError::DuplicateSyncId(s) => write!(f, "同步 ID 重复：{s}"),
             SyncError::Sqlite(e) => write!(f, "数据库错误：{e}"),
@@ -688,6 +686,7 @@ pub fn apply_plan(conn: &mut Connection, plan: &MergePlan) -> Result<MergeStats,
 /// Wire-format file extension. The format is JSON; the extension is purely
 /// advisory (used by the OS file dialog filter) and the wire format is
 /// identified by `format_version` on the parsed snapshot.
+#[cfg(test)]
 pub const SYNC_FILE_EXTENSION: &str = "iksync";
 
 /// Summary of a successful local export. Returned to the UI so it can show
@@ -1073,8 +1072,7 @@ mod tests {
     use crate::db;
     use rusqlite::Connection;
     use std::fs;
-    use std::hash::{Hash, Hasher};
-    use std::path::Path;
+    use std::hash::Hash;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     /// Deterministic UUID derivation from a test label. The wire format
@@ -1538,7 +1536,7 @@ mod tests {
     /// not re-create the row.
     #[test]
     fn cross_device_tombstone_propagation() {
-        let mut conn_a = tmp_conn("tomb-a");
+        let conn_a = tmp_conn("tomb-a");
         let mut conn_b = tmp_conn("tomb-b");
 
         // Seed the same item on both devices (via the same sync_id, same
@@ -1684,7 +1682,7 @@ mod tests {
     /// import on a fresh device B, and verify the local state matches.
     #[test]
     fn io_export_inspect_import_round_trip() {
-        let mut conn_a = tmp_conn("io-roundtrip-a");
+        let conn_a = tmp_conn("io-roundtrip-a");
         let mut conn_b = tmp_conn("io-roundtrip-b");
 
         // Seed device A with a row.
@@ -1755,7 +1753,7 @@ mod tests {
     /// `stats.inserted == 0`, `stats.updated == 0`, no duplicates.
     #[test]
     fn io_import_is_idempotent() {
-        let mut conn_a = tmp_conn("io-idem-a");
+        let conn_a = tmp_conn("io-idem-a");
         let mut conn_b = tmp_conn("io-idem-b");
 
         for (i, q) in ["Q1", "Q2", "Q3"].iter().enumerate() {
@@ -1907,7 +1905,7 @@ mod tests {
     /// otherwise the plan is `Skip(UnknownEntity)`).
     #[test]
     fn io_tombstone_round_trip() {
-        let mut conn_a = tmp_conn("io-tomb-a");
+        let conn_a = tmp_conn("io-tomb-a");
         let mut conn_b = tmp_conn("io-tomb-b");
         let sync_id = test_sync_id("tomb-sync");
 
@@ -1962,7 +1960,7 @@ mod tests {
     /// later read (T=80), import must keep MAX = 80.
     #[test]
     fn io_last_read_at_round_trip() {
-        let mut conn_a = tmp_conn("io-read-a");
+        let conn_a = tmp_conn("io-read-a");
         let mut conn_b = tmp_conn("io-read-b");
         let sync_id = test_sync_id("read-sync");
 
@@ -2032,7 +2030,7 @@ mod tests {
     /// tags / follow_ups / related_ids / favorite all round-trip exactly.
     #[test]
     fn io_complex_field_round_trip() {
-        let mut conn_a = tmp_conn("io-cplx-a");
+        let conn_a = tmp_conn("io-cplx-a");
         let mut conn_b = tmp_conn("io-cplx-b");
         let _ = db::save(
             &conn_a,
@@ -2075,7 +2073,7 @@ mod tests {
     /// SQLite file before and after, on disk, and check the hashes match.
     #[test]
     fn io_inspect_has_no_db_side_effects() {
-        let mut conn = tmp_conn("io-inspect");
+        let conn = tmp_conn("io-inspect");
         let _ = db::save(
             &conn,
             &KnowledgePayload {
@@ -2139,7 +2137,7 @@ mod tests {
     /// they must not appear anywhere in the serialized bytes.
     #[test]
     fn io_export_contains_no_secrets_or_device_settings() {
-        let mut conn = tmp_conn("io-noleak");
+        let conn = tmp_conn("io-noleak");
         let _ = db::save(
             &conn,
             &KnowledgePayload {
@@ -2193,7 +2191,7 @@ mod tests {
     #[test]
     fn io_export_overwrites_existing_file() {
         let mut conn_a = tmp_conn("io-overwrite-a");
-        let mut conn_b = tmp_conn("io-overwrite-b");
+        let conn_b = tmp_conn("io-overwrite-b");
 
         let _ = db::save(
             &conn_a,
@@ -2282,7 +2280,7 @@ mod webdav_tests {
     use crate::backup;
     use crate::config;
     use crate::webdav::testing::FakeWebDav;
-    use crate::webdav::{WebDavError, WebDavTransport};
+    use crate::webdav::WebDavError;
     use rusqlite::Connection;
     use std::fs;
     use std::path::PathBuf;
@@ -2865,7 +2863,7 @@ mod webdav_tests {
         let db = db_of("wd-etag-bound");
         seed(&db.lock().unwrap(), "A", "Qa", "1700000000", None);
         let remote = snap(vec![item("B", "Qb", "1700000000")]);
-        let mut server = FakeWebDav::with_remote(bytes_of(&remote));
+        let server = FakeWebDav::with_remote(bytes_of(&remote));
         // Every GET is immediately followed by another device committing the
         // same snapshot, so every PUT sees a stale ETag.
         let concurrent = bytes_of(&snap(vec![item("B", "Qb", "1700000000")]));

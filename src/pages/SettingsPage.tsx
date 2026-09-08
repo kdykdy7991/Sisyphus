@@ -337,7 +337,7 @@ export function SettingsPage() {
               <RotateCcw />
               <span>
                 <b>恢复知识库</b>
-                <small>从 Interview Kit 备份恢复知识数据；会替换当前知识库</small>
+                <small>从 Sisyphus 备份恢复知识数据；会替换当前知识库</small>
               </span>
               {busy === 'restore' ? <LoaderCircle className="spin" /> : <FolderOpen />}
             </button>
@@ -444,7 +444,7 @@ export function SettingsPage() {
           <h3>关于本阶段</h3>
           <p>在桌面应用内运行时会启用真实 SQLite 与真实 Vision 图片提取。浏览器模拟（npm run dev 无 Tauri）仍使用 Mock。</p>
           <small>
-            Interview Kit · Phase 2 P2
+            Sisyphus · Phase 2 P2
             <br />
             知识库备份与恢复
           </small>

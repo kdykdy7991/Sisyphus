@@ -252,6 +252,9 @@ pub struct VisionDraft {
     pub question: String,
     #[serde(default)]
     pub answer: String,
+    // Kept in the wire contract so legacy/model responses deserialize, but
+    // category authority comes exclusively from the existing Topic list.
+    #[allow(dead_code)]
     #[serde(default)]
     pub domain: String,
     #[serde(default)]

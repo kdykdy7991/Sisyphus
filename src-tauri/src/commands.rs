@@ -445,7 +445,7 @@ pub struct KnowledgeExportSummary {
 }
 
 fn knowledge_markdown(items: &[KnowledgePayload]) -> String {
-    let mut out = format!("# Interview Kit 知识库\n\n共 {} 条知识。\n", items.len());
+    let mut out = format!("# Sisyphus 知识库\n\n共 {} 条知识。\n", items.len());
     for (index, item) in items.iter().enumerate() {
         let question = item.question.split_whitespace().collect::<Vec<_>>().join(" ");
         out.push_str(&format!("\n---\n\n## {}. {}\n\n", index + 1, question));

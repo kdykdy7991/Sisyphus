@@ -1,4 +1,4 @@
-# Interview Kit — Phase 1
+# Sisyphus — Phase 1
 
 面向个人使用的桌面面试知识工作台。本阶段提供 Tauri 2 桌面壳、React 前端与完整 TypeScript Mock 交互，不包含数据库、OCR 或真实模型调用。
 

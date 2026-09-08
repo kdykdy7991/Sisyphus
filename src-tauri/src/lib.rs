@@ -66,6 +66,7 @@ pub fn run() {
             commands::knowledge_save,
             commands::knowledge_recent,
             commands::knowledge_clear,
+            commands::knowledge_delete,
             commands::settings_get,
             commands::settings_save,
             commands::settings_profiles,
@@ -91,5 +92,5 @@ pub fn run() {
             commands::log_get_dir,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running Interview Kit");
+        .expect("error while running Sisyphus");
 }

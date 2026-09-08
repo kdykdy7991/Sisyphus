@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Interview Kit",
+  "productName": "Sisyphus",
   "version": "0.1.0",
   "identifier": "com.interviewkit.desktop",
   "build": {
@@ -9,7 +9,7 @@
   "app": {
     "windows": [
       {
-        "title": "Interview Kit",
+        "title": "Sisyphus",
         "width": 1280,
         "height": 800,
         "minWidth": 0,

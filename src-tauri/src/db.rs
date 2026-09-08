@@ -426,6 +426,7 @@ pub fn list_all_for_sync(conn: &Connection) -> rusqlite::Result<Vec<KnowledgePay
 
 /// Look up a single row by its cross-device sync id, including tombstoned
 /// rows. Sync-layer only. Returns `None` when the sync id is unknown.
+#[cfg(test)]
 pub fn get_by_sync_id_including_deleted(
     conn: &Connection,
     sync_id: &str,

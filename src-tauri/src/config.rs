@@ -193,6 +193,7 @@ pub struct WebDavConfigState {
 /// Load the saved config, or return a default when the file is missing/corrupt.
 /// The DB location is filled in by the caller so it always reflects reality even
 /// if a stale value was persisted.
+#[cfg(test)]
 pub fn load(data_dir: &Path, database_location: &str) -> ApiConfig {
     let mut cfg = match fs::read_to_string(config_path(data_dir)) {
         Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
@@ -204,6 +205,7 @@ pub fn load(data_dir: &Path, database_location: &str) -> ApiConfig {
 
 /// Persist the config. Creates the file with 0600 perms (Unix) so the API key
 /// is not world-readable; on platforms without chmod this is a plain write.
+#[cfg(test)]
 pub fn save(data_dir: &Path, cfg: &ApiConfig) -> std::io::Result<()> {
     fs::create_dir_all(data_dir)?;
     let path = config_path(data_dir);

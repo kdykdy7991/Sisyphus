@@ -178,18 +178,18 @@ export const importService: ImportService = {
 export const backupService: BackupService = {
   async pickSavePath(suggestedName: string): Promise<string | null> {
     const result = await saveDialog({
-      title: '保存 Interview Kit 备份',
+      title: '保存 Sisyphus 备份',
       defaultPath: suggestedName,
-      filters: [{ name: 'Interview Kit Backup', extensions: ['ikbackup'] }],
+      filters: [{ name: 'Sisyphus Backup', extensions: ['ikbackup'] }],
     });
     return typeof result === 'string' ? result : null;
   },
   async pickOpenPath(): Promise<string | null> {
     const result = await openDialog({
-      title: '选择 Interview Kit 备份',
+      title: '选择 Sisyphus 备份',
       multiple: false,
       directory: false,
-      filters: [{ name: 'Interview Kit Backup', extensions: ['ikbackup'] }],
+      filters: [{ name: 'Sisyphus Backup', extensions: ['ikbackup'] }],
     });
     if (Array.isArray(result)) return result[0] ?? null;
     return typeof result === 'string' ? result : null;
@@ -214,18 +214,18 @@ export const backupService: BackupService = {
 export const syncService: SyncService = {
   async pickSavePath(suggestedName: string): Promise<string | null> {
     const result = await saveDialog({
-      title: '导出 Interview Kit 同步数据',
+      title: '导出 Sisyphus 同步数据',
       defaultPath: suggestedName,
-      filters: [{ name: 'Interview Kit Sync', extensions: ['iksync'] }],
+      filters: [{ name: 'Sisyphus Sync', extensions: ['iksync'] }],
     });
     return typeof result === 'string' ? result : null;
   },
   async pickOpenPath(): Promise<string | null> {
     const result = await openDialog({
-      title: '选择 Interview Kit 同步数据',
+      title: '选择 Sisyphus 同步数据',
       multiple: false,
       directory: false,
-      filters: [{ name: 'Interview Kit Sync', extensions: ['iksync'] }],
+      filters: [{ name: 'Sisyphus Sync', extensions: ['iksync'] }],
     });
     if (Array.isArray(result)) return result[0] ?? null;
     return typeof result === 'string' ? result : null;

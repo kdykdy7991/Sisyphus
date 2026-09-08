@@ -1,5 +1,8 @@
 import { NavLink, Outlet } from 'react-router-dom';
 import { BookOpen, Home, MessageCircle, ImagePlus, Settings } from './Icons';
+import packageInfo from '../../package.json';
+
+const appIcon = new URL('../../src-tauri/icons/128x128.png', import.meta.url).href;
 
 // 侧边栏导航。设计稿只画了首页 / 导入图片 / 对话 / 设置 4 项，但首页
 // 各区块的「查看全部」以及搜索结果都跳转 /knowledge，入口必须保留。
@@ -18,9 +21,9 @@ export function Shell() {
     <div className="app-shell">
       <aside className="sidebar" aria-label="主导航">
         <div className="brand">
-          <BookOpen />
+          <img src={appIcon} alt="" aria-hidden="true" />
           <div>
-            <b>Interview Kit</b>
+            <b>Sisyphus</b>
             <small>面试知识工作台</small>
           </div>
         </div>
@@ -37,6 +40,7 @@ export function Shell() {
           <br />
           A Brighter You
         </blockquote>
+        <small className="app-version">v{packageInfo.version}</small>
       </aside>
       <main className="main">
         <Outlet />

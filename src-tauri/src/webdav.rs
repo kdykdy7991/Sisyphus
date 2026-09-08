@@ -59,9 +59,7 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// Remote directory (relative to the configured root) that holds the
 /// snapshot.
 pub const REMOTE_DIR: &str = "sync";
-/// Remote snapshot file name.
-pub const REMOTE_FILE: &str = "latest.iksync";
-/// `<REMOTE_DIR>/<REMOTE_FILE>` — the only path the app ever writes.
+/// The only path the app ever writes.
 pub const REMOTE_PATH: &str = "sync/latest.iksync";
 
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
@@ -200,7 +198,7 @@ fn clean_url_host(url: &str) -> String {
             .unwrap_or(tail.len());
         let (authority, remainder) = tail.split_at(authority_end);
         if let Some(at) = authority.rfind('@') {
-            return format!("{}{}", head, &authority[at + 1..]);
+            return format!("{}{}{}", head, &authority[at + 1..], remainder);
         }
     }
     url.to_string()
@@ -375,6 +373,7 @@ impl ReqwestWebDavClient {
     }
 
     /// Absolute URL of the remote snapshot directory.
+    #[cfg(test)]
     pub fn remote_dir_url(&self) -> String {
         self.url_for(REMOTE_DIR)
     }
@@ -1107,6 +1106,14 @@ mod tests {
         assert!(out.contains("https://plain.example.com/y"), "got: {out}");
         // No userinfo -> untouched.
         assert_eq!(redact_secrets("https://x.example.com", ""), "https://x.example.com");
+    }
+
+    #[test]
+    fn clean_url_host_removes_credentials_without_dropping_the_path() {
+        assert_eq!(
+            clean_url_host("https://alice:secret@dav.example.com/files/alice?view=1#top"),
+            "https://dav.example.com/files/alice?view=1#top"
+        );
     }
 
     #[test]

@@ -35,7 +35,7 @@ export const knowledgeService: KnowledgeService = {
   async exportMarkdown(suggestedName, ids) {
     const selected = ids ? knowledge.filter(item => ids.includes(item.id)) : knowledge;
     const body = selected.map((item, index) => `## ${index + 1}. ${item.question}\n\n${item.answer}`).join('\n\n---\n\n');
-    const blob = new Blob([`# Interview Kit 知识库\n\n${body}\n`], { type: 'text/markdown;charset=utf-8' });
+    const blob = new Blob([`# Sisyphus 知识库\n\n${body}\n`], { type: 'text/markdown;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
@@ -79,7 +79,7 @@ export const backupService: BackupService = {
   },
   async inspect() {
     await wait(200);
-    return { formatVersion: 1, app: 'Interview Kit (Mock)', createdAt: new Date().toISOString(), databaseSchemaVersion: 1, knowledgeCount: knowledge.length, domainCount: 0 };
+    return { formatVersion: 1, app: 'Sisyphus (Mock)', createdAt: new Date().toISOString(), databaseSchemaVersion: 1, knowledgeCount: knowledge.length, domainCount: 0 };
   },
   async restore() {
     await wait(300);
@@ -111,7 +111,7 @@ export const syncService: SyncService = {
     return {
       path: '(mock) sync.iksync',
       formatVersion: 1,
-      app: 'Interview Kit (Mock)',
+      app: 'Sisyphus (Mock)',
       createdAt: new Date().toISOString(),
       sourceDevice: '',
       itemCount: knowledge.length,
