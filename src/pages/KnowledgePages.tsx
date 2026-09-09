@@ -588,11 +588,26 @@ export function KnowledgeDetailPage() {
     if (deleting) return;
     setDeleting(true);
     try {
+      // Resolve the destination before deletion while the current item still
+      // exists in the ordered list. Prefer the following item; when deleting
+      // the tail, fall back to the previous one. Only an empty library returns
+      // to the list page.
+      const index = knowledge.findIndex(entry => entry.id === item.id);
+      const replacement = index >= 0
+        ? knowledge[index + 1] || knowledge[index - 1]
+        : undefined;
       await knowledgeService.delete(item.id);
       await refresh();
       setMoreOpen(false);
       setConfirmDelete(false);
-      nav('/knowledge');
+      if (replacement) {
+        setEditing(false);
+        setItem(replacement);
+        setDraft(replacement);
+        nav(`/knowledge/${replacement.id}`, { replace: true });
+      } else {
+        nav('/knowledge', { replace: true });
+      }
     } finally {
       setDeleting(false);
     }
