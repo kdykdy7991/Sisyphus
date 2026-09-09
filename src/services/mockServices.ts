@@ -4,11 +4,12 @@ import type { BackupService, ChatService, ImportService, KnowledgeService, Setti
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 let knowledge = [...seedKnowledge];
 let topics = [...new Set(knowledge.map(item => item.topic).filter(Boolean))];
-const makeDraft = (image: ImportImage, index: number): Knowledge => {
+const makeDraft = (image: ImportImage, imageIndex: number, questionIndex: number): Knowledge => {
   const existing = knowledge.find(item => item.topic === 'Redis');
+  const isSecondQuestion = questionIndex === 1;
   return {
-    id: `draft-${image.id}-${index}`, question: index ? 'Redis 为什么使用单线程？' : 'Redis 为什么快？',
-    answer: index ? 'Redis 核心命令使用单线程串行执行，避免了多线程上下文切换与锁竞争，并让命令天然保持原子性。网络 I/O 可由多线程处理。' : 'Redis 的高性能来自内存访问、高效数据结构、单线程命令执行、I/O 多路复用以及简洁的 RESP 协议。',
+    id: `draft-${image.id}-${imageIndex}-${questionIndex}`, question: isSecondQuestion ? 'Redis 为什么使用单线程？' : 'Redis 为什么快？',
+    answer: isSecondQuestion ? 'Redis 核心命令使用单线程串行执行，避免了多线程上下文切换与锁竞争，并让命令天然保持原子性。网络 I/O 可由多线程处理。' : 'Redis 的高性能来自内存访问、高效数据结构、单线程命令执行、I/O 多路复用以及简洁的 RESP 协议。',
     domain: existing?.domain || '未分类', topic: existing?.topic || '', tags: ['Redis', '内存', 'I/O 多路复用'], followUps: ['Redis 6 为什么引入多线程？', 'I/O 多路复用如何工作？'], relatedIds: ['redis-fast', 'redis-single'], source: `截图导入 · ${image.name}`, createdAt: new Date().toLocaleString(), updatedAt: new Date().toLocaleString(),
   };
 };
@@ -46,10 +47,22 @@ export const knowledgeService: KnowledgeService = {
   },
 };
 export const importService: ImportService = {
+  async extractUrl(url) {
+    await wait(900);
+    const source: ImportImage = { id: `web-${Date.now()}`, name: '微信公众号面试文章', url, sourceUrl: url, kind: 'web', status: 'review', drafts: [] };
+    return [makeDraft(source, 0, 0), makeDraft(source, 0, 1)];
+  },
   async extract(images, onProgress) {
     let next: ImportImage[] = images.map(image => ({ ...image, status: 'queued' })); onProgress(next); await wait(550);
     next = next.map(image => ({ ...image, status: 'extracting' as const })); onProgress(next); await wait(950);
-    next = next.map((image, index) => ({ ...image, status: 'completed' as const, drafts: [makeDraft(image, index)] })); onProgress(next); await wait(350);
+    // One screenshot can contain any number of independent Q&A pairs. Keep
+    // the browser mock aligned with the real Vision response by returning two
+    // reviewable drafts per image instead of implying a 1:1 image/draft model.
+    next = next.map((image, index) => ({
+      ...image,
+      status: 'completed' as const,
+      drafts: [makeDraft(image, index, 0), makeDraft(image, index, 1)],
+    })); onProgress(next); await wait(350);
     next = next.map(image => ({ ...image, status: 'review' as const })); onProgress(next); return next;
   },
   async confirm(items) { for (const item of items) await knowledgeService.save({ ...item, id: `knowledge-${Date.now()}-${Math.random().toString(16).slice(2)}`, updatedAt: new Date().toLocaleString() }); },

@@ -27,6 +27,7 @@ pub enum LlmError {
     /// No API key configured (Settings not filled in).
     MissingConfig(String),
     MalformedImage(String),
+    InvalidInput(String),
     /// Transport / connectivity failure (DNS, refused, TLS, timeout).
     Network(String),
     /// The endpoint answered but with a non-2xx status.
@@ -52,6 +53,7 @@ impl std::fmt::Display for LlmError {
         match self {
             LlmError::MissingConfig(m) => write!(f, "{m}"),
             LlmError::MalformedImage(m) => write!(f, "图片格式无效：{m}"),
+            LlmError::InvalidInput(m) => write!(f, "{m}"),
             LlmError::Network(m) => write!(f, "网络请求失败：{m}"),
             LlmError::Api { status, body } => {
                 write!(f, "模型服务返回错误（HTTP {status}）：{body}")

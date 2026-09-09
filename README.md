@@ -26,7 +26,7 @@ npm run build
 - 首页：全局搜索、知识概览、知识领域、最近阅读、最近导入与快捷入口。
 - 知识库：领域/主题浏览、关键词搜索、知识列表与空状态。
 - Knowledge Detail：文章式阅读、收藏、原地编辑、标签、追问、相关问题、来源、备注和时间信息。
-- 导入图片：文件选择、拖放、剪贴板粘贴、多图删除/排序、独立/连续模式、提取状态流、Review、草稿切换、全字段编辑、Pass、Confirm 与批量操作。
+- 导入知识：支持微信公众号等公开网页链接和图片；单个来源可提取多组问答，并提供提取状态、Review、草稿切换、全字段编辑、Pass、Confirm 与批量操作。
 - 对话：Knowledge Scope、提问、Loading、文章式 Mock Answer、引用与相关问题；引用可跳转 Knowledge Detail。
 - 设置：模型参数、连接测试、本地数据位置及四类数据操作的 Mock UI。
 
@@ -35,7 +35,7 @@ npm run build
 页面仅依赖 Service Interface，Mock 实现集中在 `src/services/mockServices.ts`：
 
 - `KnowledgeService`: `list / get / search / save`
-- `ImportService`: `extract / confirm`
+- `ImportService`: `extract / extractUrl / confirm`
 - `ChatService`: `ask`
 - `SettingsService`: `get / save / testConnection`
 

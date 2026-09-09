@@ -223,6 +223,10 @@ h1,h2,h3,p{margin-top:0}
 .reader-actions>span{flex:1}
 .reader-actions button{display:flex;align-items:center;gap:5px}
 .reader-actions small{background:#f0f1f1;padding:4px 8px;border-radius:14px}
+.reader-actions .knowledge-sibling-nav{display:flex;align-items:center;gap:6px;min-width:0}
+.reader-actions .knowledge-sibling-nav button{width:82px;justify-content:center;padding:7px 9px;border:1px solid var(--line);border-radius:7px;background:#fff;color:#39414b;white-space:nowrap}
+.reader-actions .knowledge-sibling-nav button:disabled{opacity:.38;cursor:not-allowed}
+.reader-actions .knowledge-sibling-nav svg{width:15px;flex:0 0 auto}
 .reader>h1{font-family:var(--reader-sans);font-size:34px;font-weight:700;line-height:1.35;color:#111;margin:24px 0 16px}
 .answer{margin-top:28px}
 .answer h2{font-family:var(--reader-sans);font-size:20px;font-weight:600;line-height:1.45;margin:32px 0 13px;color:#1a1a1a}
@@ -252,6 +256,10 @@ h1,h2,h3,p{margin-top:0}
 .form-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:20px}
 
 /* import */.dropzone{height:250px;border:1px dashed #b8bdc4;background:#fafaf9;border-radius:10px;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.web-import{max-width:760px;margin:0 auto 24px;padding:20px;border:1px solid var(--line);border-radius:10px;background:#fafaf9}
+.web-import-title{display:flex;align-items:center;gap:12px;margin-bottom:14px}.web-import-title>svg{width:22px}.web-import-title span{display:flex;flex-direction:column;gap:3px}.web-import-title small{color:var(--muted)}
+.web-import form{display:flex;gap:10px}.web-import form .input{flex:1}.web-import form .btn{white-space:nowrap}.web-import-error{display:flex;align-items:center;gap:6px;color:#a43b32;font-size:12px;margin-top:10px}.web-import-error svg{width:15px}
+.import-divider{max-width:760px;margin:0 auto 18px;display:flex;align-items:center;gap:12px;color:var(--muted);font-size:12px}.import-divider:before,.import-divider:after{content:"";height:1px;background:var(--line);flex:1}
 .dropzone.drag-active{border-color:#242424;background:#f2f2f0}
 .dropzone>svg{width:32px;height:32px}
 .dropzone h2{font:600 19px var(--serif);margin:14px 0 4px}
@@ -580,6 +588,7 @@ body.drawer-open .main{overflow:hidden}
 
 /* ---- 竖屏（<=699px）通用修正：覆盖 540-699 与 <=539 两个断点 ---- */
 @media (max-width:699px){
+  .reader-actions{gap:8px;flex-wrap:wrap}.reader-actions .knowledge-sibling-nav{order:2;width:100%;display:grid;grid-template-columns:1fr 1fr}.reader-actions .knowledge-sibling-nav button{max-width:none;min-width:0;justify-content:space-between}.reader-actions>span{display:none}
   /* 页面容器跟随 .main 内容高度，不再用 100vh 撑出底部导航之外 */
   .home-layout,.knowledge-browser,.detail,.review{min-height:100%}
 

@@ -115,6 +115,9 @@ const blobToDataUrl = (url: string): Promise<string> =>
 // drafts stay usable. Re-running extract on already-completed images (retry) is
 // a no-op for them. Image order is never used to merge content.
 export const importService: ImportService = {
+  async extractUrl(url) {
+    return invoke<Knowledge[]>('web_extract', { url });
+  },
   async extract(images, onProgress) {
     // Keep already-extracted images as-is (retry), reset the rest to queued.
     let next: ImportImage[] = images.map(im =>

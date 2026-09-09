@@ -11,7 +11,7 @@ const appMark = new URL('../assets/sisyphus-mark.png', import.meta.url).href;
 const nav = [
   ['/', '首页', Home, 'home'],
   ['/knowledge', '知识库', BookOpen, 'knowledge'],
-  ['/import', '导入图片', ImagePlus, 'import'],
+  ['/import', '导入', ImagePlus, 'import'],
   ['/chat', '对话', MessageCircle, 'chat'],
   ['/settings', '设置', Settings, 'settings'],
 ] as const;

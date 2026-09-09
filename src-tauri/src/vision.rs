@@ -28,8 +28,13 @@ pub const VISION_SYSTEM_PROMPT: &str = r###"
 
 ## 1. 独立问题拆分
 - 每个独立面试问题生成一个 item。
-- 如果截图包含多个问题，必须拆成多个 item。
+- 一张图片可能包含一组或多组问答。必须扫描整张图片，提取所有能够形成完整问答的内容，不要识别到第一组后就停止。
+- 如果截图包含多个问题，必须拆成多个 item；`items` 的数量不受图片数量限制，也不固定为 1。
 - 不要把多个不同问题合并成一个问答。
+- 每个 item 的 answer 只能对应该 item 的 question，不要把相邻问题的答案混入当前 item。
+- 根据编号、标题、排版位置和上下文判断问题与答案的对应关系，并按它们在图片中的阅读顺序返回。
+- 同一问题下的多个答案要点应合并到该问题的一个 answer 中；只有出现新的独立问题时才创建下一个 item。
+- 只有问题而没有可辨认答案的内容，不要编造答案，也不要将它误当作上一题的追问。
 
 ## 2. question
 - 保留原问题核心含义。
@@ -192,7 +197,7 @@ answer 是一个 string，请用换行与列表体现层级。模型看到的 an
 /// just points the model at the per-image task + JSON shape; the formatting
 /// rules live in the system prompt so a single edit covers every call.
 const VISION_USER_INSTRUCTION: &str = r###"
-请从这张图片中识别并整理所有独立的面试题，严格遵循 system 中的整理与排版规则，
+请完整扫描这张图片，识别并整理其中所有独立的面试问答（可能有多组，不能只返回第一组），严格遵循 system 中的拆分、配对、整理与排版规则，
 并按下面的 JSON 结构输出（不要输出任何解释、前后缀或 Markdown 代码块）：
 
 {
@@ -639,6 +644,11 @@ mod tests {
         assert!(VISION_SYSTEM_PROMPT.contains("每个 answer 通常使用 0~1 个 blockquote"));
         assert!(VISION_SYSTEM_PROMPT.contains("复杂答案最多 2 个"));
         assert!(VISION_SYSTEM_PROMPT.contains("不要为了“好看”生成 blockquote"));
+        assert!(VISION_SYSTEM_PROMPT.contains("不要识别到第一组后就停止"));
+        assert!(VISION_SYSTEM_PROMPT.contains("items` 的数量不受图片数量限制，也不固定为 1"));
+        assert!(VISION_SYSTEM_PROMPT.contains("answer 只能对应该 item 的 question"));
+        assert!(VISION_SYSTEM_PROMPT.contains("按它们在图片中的阅读顺序返回"));
+        assert!(VISION_SYSTEM_PROMPT.contains("同一问题下的多个答案要点应合并"));
     }
 
     #[test]
@@ -668,6 +678,7 @@ mod tests {
         assert!(VISION_USER_INSTRUCTION.contains("\"tags\""));
         assert!(VISION_USER_INSTRUCTION.contains("\"followUpQuestions\""));
         assert!(VISION_USER_INSTRUCTION.contains("{\"items\":[]}"));
+        assert!(VISION_USER_INSTRUCTION.contains("可能有多组，不能只返回第一组"));
     }
 
     /// The parser must keep the embedded newlines in `answer` intact so the

@@ -550,6 +550,28 @@ export function KnowledgeDetailPage() {
     [item, knowledge]
   );
 
+  const currentIndex = knowledge.findIndex(x => x.id === id);
+  const previousItem = currentIndex > 0 ? knowledge[currentIndex - 1] : undefined;
+  const nextItem = currentIndex >= 0 && currentIndex < knowledge.length - 1 ? knowledge[currentIndex + 1] : undefined;
+  const openAdjacent = (target?: Knowledge) => {
+    if (!target || editing) return;
+    setMoreOpen(false);
+    setRailOpen(false);
+    nav(`/knowledge/${target.id}`);
+  };
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (editing || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.matches('input, textarea, select, [contenteditable="true"]')) return;
+      if (event.key === 'ArrowLeft' && previousItem) openAdjacent(previousItem);
+      if (event.key === 'ArrowRight' && nextItem) openAdjacent(nextItem);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [editing, previousItem?.id, nextItem?.id]);
+
   if (!item || !draft) return <div className="center"><Spinner /></div>;
 
   const save = async () => {
@@ -598,6 +620,14 @@ export function KnowledgeDetailPage() {
       <article className="reader">
         <div className="reader-actions">
           <small># {knowledge.findIndex(x => x.id === item.id) + 1}</small>
+          <nav className="knowledge-sibling-nav" aria-label="相邻知识">
+            <button disabled={!previousItem || editing} onClick={() => openAdjacent(previousItem)} aria-label="上一条知识">
+              <ChevronLeft />上一条
+            </button>
+            <button disabled={!nextItem || editing} onClick={() => openAdjacent(nextItem)} aria-label="下一条知识">
+              下一条<ChevronRight />
+            </button>
+          </nav>
           <span />
           <button
             onClick={() => setItem({ ...item, favorite: !item.favorite })}

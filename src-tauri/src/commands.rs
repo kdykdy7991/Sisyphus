@@ -11,6 +11,7 @@ use crate::log::{self, LogState};
 use crate::similarity;
 use crate::sync;
 use crate::vision;
+use crate::web_extract as webpage;
 use crate::webdav;
 
 // Thin Tauri command layer: parse args, call db, convert errors to strings.
@@ -235,6 +236,26 @@ pub async fn vision_extract(
             log::append_failure(&log_state, "vision_extract", &e);
             e.to_string()
         })
+}
+
+#[tauri::command]
+pub async fn web_extract(
+    db: State<'_, Db>, config_state: State<'_, ApiConfigState>, log_state: State<'_, LogState>, url: String,
+) -> Result<Vec<KnowledgePayload>, String> {
+    let cfg = config_state.inner.lock().unwrap().clone();
+    if cfg.api_key.trim().is_empty() { return Err("尚未配置 API Key，请先在「设置」中填写。".to_string()); }
+    let client = OpenAiCompatClient::new(cfg.api_base_url, cfg.api_key, cfg.vision_model)
+        .with_reasoning(cfg.vision_thinking_enabled, cfg.vision_reasoning_effort);
+    let existing_categories = {
+        let conn = db.conn.lock().unwrap();
+        let items = db::list(&conn).map_err(|e| e.to_string())?;
+        let mut categories = items.into_iter().filter(|item| !item.topic.trim().is_empty() && item.topic.chars().count() <= 24).map(|item| (item.domain, item.topic)).collect::<std::collections::BTreeSet<_>>();
+        for topic in db::list_topics(&conn).map_err(|e| e.to_string())? {
+            if !categories.iter().any(|(_, existing)| existing == &topic) { categories.insert(("未分类".to_string(), topic)); }
+        }
+        categories.into_iter().collect::<Vec<_>>()
+    };
+    webpage::extract_from_url(&client, &url, cfg.vision_max_tokens, &existing_categories).await.map_err(|e| { log::append_failure(&log_state, "web_extract", &e); e.to_string() })
 }
 
 /// A knowledge-organization suggestion surfaced in Review before Confirm.

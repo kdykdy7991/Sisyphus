@@ -9,6 +9,7 @@ mod similarity;
 mod sync;
 mod tokenizer;
 mod vision;
+mod web_extract;
 mod webdav;
 
 use tauri::Manager;
@@ -76,6 +77,7 @@ pub fn run() {
             commands::settings_profile_delete,
             commands::settings_test_connection,
             commands::vision_extract,
+            commands::web_extract,
             commands::analyze_similarity,
             commands::knowledge_chat,
             commands::backup_create,

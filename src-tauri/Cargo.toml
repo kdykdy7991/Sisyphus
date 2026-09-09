@@ -1,6 +1,6 @@
 [package]
 name = "interview-kit"
-version = "0.1.1"
+version = "0.1.2"
 description = "Personal interview knowledge workbench"
 authors = ["Sisyphus"]
 edition = "2021"
